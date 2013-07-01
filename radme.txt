@@ -1,0 +1,16 @@
+class testclass:
+    i=112
+    def f(self):
+    # mis see self on?
+    
+    
+    
+saab kasutada ja omistada vaartusi testclass.i =
+
+x=testclass
+
+x.f()    vordub testclass.f(x) 
+
+
+huhh... koige kiirem oleks pymodbus kasutuselevotuga vast, ja message id kasutamisega
+
