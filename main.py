@@ -1,16 +1,23 @@
 import android
 import os
 import time
+droid = android.Android()
 
 APPDIR='/sdcard/sl4a/scripts/d4c/' # trailing slash needed
 
-#STARTUP_SCRIPTS = ['channelmonitor3.py','webserver.py']
-STARTUP_SCRIPTS = ['channelmonitor_pm.py','webserver.py']
+#if os.path.isdir('pymodbus') and os.path.isdir('requests'): # only use pymodbus if the module can be loaded
+try:
+    import pymodbus  # these modules can also be elsewhere!
+    import requests
+    STARTUP_SCRIPTS = ['channelmonitor_pm.py','webserver.py'] # using pymodbus and requests
+    print 'starting using pymodbus'
+except:
+    STARTUP_SCRIPTS = ['channelmonitor3.py','webserver.py'] # not using pymodbus
+    print 'starting without pymodbus'
+    
 
-droid = android.Android()
-
-msg='starting the application'
-#droid.ttsSpeak(msg)
+msg='starting'
+droid.ttsSpeak(msg)
 #droid.makeToast(msg)
 #time.sleep(1)
 

@@ -92,22 +92,37 @@ def sqlread(table): # drops table and reads from file table.sql that must exist
 
             
 def read_proxy(): # read modbus proxy registers, wlan mac most importantly. start only if tcp conn already exists!
-    global mac
+    global mac, USBstate, WLANip
+    i=0
     try:
-        result = client.read_holding_registers(address=310, count=3, unit=255)
+        result = client.read_holding_registers(address=310, count=3, unit=255) # wlan mac
         mac = ''
-        i=0
         for i in range(3):
-            mac = mac + format("%04x" % result.registers[i]).upper() # must be in upper case
-        msg='got wlan mac from proxy: '+mac
+            mac = mac + format("%04x" % result.registers[i]).upper() 
+        msg='read_proxy: mac='+mac
+        log2file(msg) # debug
         if mac[0:3] <> 'D05': # invalid mac for sony xperia
             msg=msg+' - invalid! replacing with 000000000000!'
             mac='000000000000'
             print(msg)
             log2file(msg)
-            return 1
-        print(msg)
-        log2file(msg)
+            return 2
+        
+        result = client.read_holding_registers(address=313, count=2, unit=255) # wlan ip
+        WLANip=''
+        for i in range(2):
+            if WLANip<>'':
+                WLANip=WLANip+'.'
+            WLANip = WLANip+str(result.registers[i]/256)+'.'+str(result.registers[i]&255) 
+        msg='read_proxy: WLANip='+WLANip
+        log2file(msg) # debug
+        
+        result = client.read_holding_registers(address=200, count=1, unit=255) # USB state
+        USBstate=result.registers[0]
+        msg='read_proxy: USBstate='+str(USBstate) # 1 = running
+        log2file(msg) # debug
+        
+        
         return 0
     except:
         traceback.print_exc()
@@ -1863,6 +1878,9 @@ err_aichannels=0 # error counters to sqlread or even stop and dbREcreate
 err_dichannels=0
 err_counters=0
 err_proxy=0
+USBstate=255 
+WLANip=''
+
 
 try:
     OSTYPE=os.environ['OSTYPE'] #  == 'linux': # running on linux, not android
@@ -2007,8 +2025,14 @@ if stop == 0: # lock ok
     
     # try to read the wlan mac and sim card serial from the modbusproxy. then the setup can be sent to the server without reading the. 
     ProxyState=read_proxy() # wlan mac and a few other things to find out / getting here only if tcp conn ok
-    report_setup() # get the mac from setup
+    if ProxyState == 0: # ok
+        msg='proxy connected and readable'
+    else:
+        msg='proxy CANNOT be connected and read!'
 
+    print(msg)
+    log2file(msg)
+    report_setup() # get the mac from setup
     tcperr = 0
     
     
@@ -2493,7 +2517,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     if ts>ts_interval1+interval1delay: # not to try too often, deal with other things too
         ts_interval1=ts
         #print 'MBoldsta, MBsta',MBoldsta,MBsta,'at',ts # report once in 5 seconds or so
-        #read_proxy() #debug to find out wlan activity influence on wlan mac readability
+        read_proxy() # recheck the parameters accessible via modbusproxy
         
         if err_dichannels+err_aichannels+err_counters>0: # print channel comm errors
             print 'modbus errors di ai count',err_dichannels,err_aichannels,err_counters
