@@ -3,11 +3,13 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 25.06.2013'  # using pymodbus!
+APVER='channelmonitor_pm.py 28.06.2013'  # using pymodbus!
 
 # 23.06.2013 based on channelmonitor3.py
-# 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this is controlled by setup.sql
- 
+# 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
+# 28.06.2013 checking modbusproxy before slave registers and tcperr increase. stop and recreate db if proxy running but slave inaccessible. 
+# 02.07.2013 first check reg 255:0 1
+
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
 # separate ai reading and ai sending intervals!
@@ -58,7 +60,7 @@ def sqlread(table): # drops table and reads from file table.sql that must exist
     try:
         sql = open(filename).read()
     except:
-        msg='sqlreload: could not read into table file '+filename
+        msg='sqlreload: could not find sql file '+filename
         print(msg)
         log2file(msg)
         traceback.print_exc()
@@ -75,7 +77,8 @@ def sqlread(table): # drops table and reads from file table.sql that must exist
         if table in conn4tables:
             conn4.execute(Cmd)
             conn4.executescript(sql) # read table into database
-        msg='sqlreload: dropped+read the table '+table
+        msg='sqlreload: successfully dropped and read the table '+table
+        print(msg)
         log2file(msg)
         return 0
     except:
@@ -86,104 +89,116 @@ def sqlread(table): # drops table and reads from file table.sql that must exist
         time.sleep(1)
         return 1
             
+
+            
+def read_proxy(): # read modbus proxy registers, wlan mac most importantly. start only if tcp conn already exists!
+    global mac
+    try:
+        result = client.read_holding_registers(address=310, count=3, unit=255)
+        mac = ''
+        i=0
+        for i in range(3):
+            mac = mac + format("%04x" % result.registers[i]).upper() # must be in upper case
+        msg='got wlan mac from proxy: '+mac
+        if mac[0:3] <> 'D05': # invalid mac for sony xperia
+            msg=msg+' - invalid! replacing with 000000000000!'
+            mac='000000000000'
+            print(msg)
+            log2file(msg)
+            return 1
+        print(msg)
+        log2file(msg)
+        return 0
+    except:
+        traceback.print_exc()
+        mac='000000000000'
+        msg='reading mbproxy failed, mac set to '+mac
+        print(msg)
+        log2file(msg)
+        return 1
         
         
-    
+        
 def channelconfig(): # channel setup register setting based on devicetype and channel registers configuration. try to check channel conflicts
+    # asuuming thge proxy connection is ok, tested before (ProxyState == 0)
     global tcperr,inumm,ts,sendstring #,MBsta # not yet used, add handling
     mba=0
     register=''
     value=0
     regok=0
     mba_array=[]
-    #respcode=read_register(1,1,1) # test connection with proxy, based on di register read success (use for dc5888-2)
-    try:
-        result = client.read_holding_registers(address=1, count=1, unit=1) # using pymodbus
-        tcpdata = result.registers[0]
-        respcode = 0
-    except:
-        respcode = 1
         
-    #MBsta[0]=respcode
-    if respcode<>0:
-        print "no modbusproxy connection (1,1,1)!"
-        sys.stdout.flush()
-        time.sleep(1)
-        return 2
-    else: # proxy conn ok, SET AND CHECK channel configurations from setup registers W<mba>.<regadd>
-        print "modbusproxy connection (1,1,1) ok!"
-                
-        Cmd4="select register,value from setup" 
-        cursor4.execute(Cmd4) # read setup variables into cursor
-        conn4.commit()
-        for row in cursor4:
-            regok=0
-            msg='setup record '+repr(row)
+    Cmd4="select register,value from setup" 
+    cursor4.execute(Cmd4) # read setup variables into cursor
+    conn4.commit()
+    for row in cursor4:
+        regok=0
+        msg='setup record '+repr(row)
+        print(msg)
+        log2file(msg)
+        register=row[0] # contains W<mba>.<regadd> or R<mba>.<regadd>
+        if '.' in register: # dot is needed
+            try:
+                mba=int(register[1:].split('.')[0])
+                regadd=int(register[1:].split('.')[1])
+                msg='going to set or read register '+register+' at mba '+str(mba)+', regadd '+str(regadd)
+                regok=1
+            except:
+                msg='invalid mba and/or register data for '+register
             print(msg)
             log2file(msg)
-            register=row[0] # contains W<mba>.<regadd> or R<mba>.<regadd>
-            if '.' in register: # dot is needed
-                try:
-                    mba=int(register[1:].split('.')[0])
-                    regadd=int(register[1:].split('.')[1])
-                    msg='going to set or read register '+register+' at mba '+str(mba)+', regadd '+str(regadd)
-                    regok=1
-                except:
-                    msg='invalid mba and/or register data for '+register
-                print(msg)
-                log2file(msg)
-                
-                if regok == 1:
-                    if row[1] <>'': # value to WRITE  must not be empty
-                        value=int(row[1]) # contains 16 bit word
-                        msg='sending config wordh '+format("%04x" % value)+' to mba '+str(mba)+' regadd '+str(regadd)
-                        time.sleep(0.1) # successive sending without delay may cause failures!
-                        try:
-                            client.write_register(address=regadd, value=value, unit=mba) # only one regiter to write here
-                            respcode=0 #write_register(mba,regadd,value,0) # write_register sets MBsta[] as well
-                        except:
-                            respcode=1
-                        #MBsta[mba-1]=respcode
-                        if respcode<>0:
-                            msg=msg+' - write_register() PROBLEM!'
-                            print(msg)
-                            log2file(msg)
-                            sys.stdout.flush()
-                            time.sleep(1)
-                            #return 1 # continue with others!
-                        
-                        time.sleep(0.1) # delay needed after write before read!
-                        
-                    #if read_register(mba,regadd,1) == 0: # read back, can also happen without writing first!
+            
+            if regok == 1:
+                if row[1] <>'': # value to WRITE  must not be empty
+                    value=int(row[1]) # contains 16 bit word
+                    msg='sending config wordh '+format("%04x" % value)+' to mba '+str(mba)+' regadd '+str(regadd)
+                    time.sleep(0.1) # successive sending without delay may cause failures!
                     try:
-                        result = client.read_holding_registers(address=regadd, count=1, unit=mba)
-                        tcpdata = result.registers[0] 
-                        if register[0] == 'W': # writable
-                            if tcpdata == value: # the actual value verified
-                                msg=msg+' - written and read, verified OK'
-                                print(msg)
-                                log2file(msg)
-                            else:
-                                msg=' - unexpected value '+str(tcpdata)+' during verification, register '+str(mba)+'.'+str(regadd)
-                                print(msg)
-                                log2file(msg)
-                                sys.stdout.flush()
-                                time.sleep(0.5)
-                                return 1
-                        else: # readable only
-                            msg='reading configuration data from mba.reg '+str(mba)+'.'+str(regadd)
-                        #send the actual data to the monitoring server
-                        sendstring=sendstring+"R"+str(mba)+"."+str(regadd)+":"+str(tcpdata)+"\n"  # register content reported as decimal
-                        
-                    except: # else:
-                        msg=' - could not read back the register mba.reg '+str(mba)+'.'+str(regadd)
+                        client.write_register(address=regadd, value=value, unit=mba) # only one regiter to write here
+                        respcode=0 #write_register(mba,regadd,value,0) # write_register sets MBsta[] as well
+                    except:
+                        respcode=1
+                    #MBsta[mba-1]=respcode
+                    if respcode<>0:
+                        msg=msg+' - write_register() PROBLEM!'
                         print(msg)
                         log2file(msg)
                         sys.stdout.flush()
                         time.sleep(1)
-                        return 1
+                        #return 1 # continue with others!
+                    
+                    time.sleep(0.1) # delay needed after write before read!
+                    
+                #if read_register(mba,regadd,1) == 0: # read back, can also happen without writing first!
+                try:
+                    result = client.read_holding_registers(address=regadd, count=1, unit=mba)
+                    tcpdata = result.registers[0] 
+                    if register[0] == 'W': # writable
+                        if tcpdata == value: # the actual value verified
+                            msg=msg+' - written and read, verified OK'
+                            print(msg)
+                            log2file(msg)
+                        else:
+                            msg=' - unexpected value '+str(tcpdata)+' during verification, register '+str(mba)+'.'+str(regadd)
+                            print(msg)
+                            log2file(msg)
+                            sys.stdout.flush()
+                            time.sleep(0.5)
+                            return 1
+                    else: # readable only
+                        msg='reading configuration data from mba.reg '+str(mba)+'.'+str(regadd)
+                    #send the actual data to the monitoring server
+                    sendstring=sendstring+"R"+str(mba)+"."+str(regadd)+":"+str(tcpdata)+"\n"  # register content reported as decimal
+                    
+                except: # else:
+                    msg=' - could not read back the register mba.reg '+str(mba)+'.'+str(regadd)
+                    print(msg)
+                    log2file(msg)
+                    sys.stdout.flush()
+                    time.sleep(1)
+                    return 1
 
-        udpsend(inumm,int(ts)) # sending to the monitoring server
+    udpsend(inumm,int(ts)) # sending to the monitoring server
         
     sys.stdout.flush()
     time.sleep(0.5)
@@ -192,9 +207,7 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
         
 
 
-
-
-def write_dochannels():
+def write_dochannels(): # synchronizes DO bits (output channels) with data in dochannels table, using actual values checking via output records in dichannels table
     # find out which do channels need to be changed based on dichannels and dochannels value differencies
     # and use write_register() write modbus registers (not coils) to get the desired result (all do channels must be also defined as di channels in dichannels table!)
     global inumm,ts,ts_inumm,mac,tcpdata,tcperr #,MBsta
@@ -306,21 +319,20 @@ def write_dochannels():
                         
             
         #conn3.commit()  # dicannel-bits transaction end
-
+        return 0
+        
     except:
         print 'problem with dichannel grp select in write_do_channels!'
         sys.stdout.flush()
         #time.sleep(1)
         #traceback.print_exc()
-    
+        return 1
     
     conn3.commit() # transaction end
     
     # write_dochannels() end. FRESHENED DICHANNELS TABLE VALUES AND CGH BITS (0 TO SEND, 1 TO PROCESS)
 
 
-
-    
 
 def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly (about 1..3 s interval). do not send here.
     locstring="" # local
@@ -495,7 +507,8 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                 conn3.execute(Cmd3) # kirjutamine
             
         conn3.commit() # aichannels transaction end
-        
+        return 0
+    
     except:
         msg='PROBLEM with aichannels reading or processing at'+str(int(ts))
         print(msg)
@@ -503,7 +516,8 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
         traceback.print_exc()
         sys.stdout.flush()
         time.sleep(0.5)
-        
+    
+        return 1
     #read_aichannels end
 
     
@@ -641,7 +655,7 @@ def make_aichannels_svc(): # send the ai service messages to the monitoring serv
         
     
 
-def read_dichannel_bits(): # binary inputs, changes to be found
+def read_dichannel_bits(): # binary inputs, bit changes to be found and values in dichannels table updated
 # reads 16 bits as di or do channels to be reported to monitoring
 # NB the same bits can be of different rows, to be reported in different services. services and their members must be unique
     locstring="" # see on siin lokaalne!
@@ -721,16 +735,17 @@ def read_dichannel_bits(): # binary inputs, changes to be found
                 #if respcode >0:
                     #socket_restart() # close and open tcpsocket
                 #    return 2
-            
+                return 1
+                
         conn3.commit()  # dichannel-bits transaction end 
-        return respcode
+        return 0
 
     except:
         print 'there was a problem with dichannels data reading or processing!'
         traceback.print_exc()
         sys.stdout.flush()
         time.sleep(1)
-        return 5 
+        return 1 
     
 # read_dichannel_bits() end. FRESHENED DICHANNELS TABLE VALUES AND CGH BITS (0 TO SEND, 1 TO PROCESS)
 
@@ -875,8 +890,6 @@ def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only wh
         #traceback.print_exc()
         
 #make_dichannel_svc() lopp
-
-
 
 
 
@@ -1121,20 +1134,19 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                 
         conn3.commit() # counters transaction end
         conn1.commit() # buff2server transaction end
-        return respcode
+        return 0 #respcode
         
     except: # end reading counters
         print 'problem with counters read or processing'
         traceback.print_exc() 
         sys.stdout.flush()
         time.sleep(1)
-        return 5
+        return 1
         
 #read_counters end #############
  
  
         
-    
 
 def report_setup(): # send setup data to server via buff2server table as usual. 
     locstring="" # local
@@ -1158,9 +1170,9 @@ def report_setup(): # send setup data to server via buff2server table as usual.
         conn1.execute(Cmd1)
         
         if mac == '000000000000': # no valid controller id value yet, startup phase! read from modbusproxy. what if inaccessible? then backup from setup S200.
-            Cmd4="select register,value from setup where register='S200'" # find out the correct first, avoid reporting anything else with wrong mac!
+            Cmd4="select register,value from setup where register='S200'" # find out ONLY the correct first, avoid reporting anything else with wrong mac!
         else:
-            Cmd4="select register,value from setup" # no multimember registers for setup!
+            Cmd4="select register,value from setup" # no multimember registers for setup! 
         #print Cmd4 # temporary
         cursor4.execute(Cmd4)
         
@@ -1180,11 +1192,12 @@ def report_setup(): # send setup data to server via buff2server table as usual.
             #print "stp Cmd1=",Cmd1 # temporary debug
             conn1.execute(Cmd1)
               
-            if 'S200' in val_reg: # mac stored temporarely instead of discovery
-                oldmac=mac
-                mac=reg_val
-                print 'controller id set to',mac,', was',oldmac
-                
+            if OSTYPE == 'linux': # no modbusproxy in use then
+                if 'S200' in val_reg: # mac stored temporarely instead of discovery
+                    oldmac=mac
+                    mac=reg_val
+                    print 'controller id set to',mac,', was',oldmac
+                    
                 
         conn1.commit() # buff2server trans lopp
         conn4.commit() # asetup trans lopp
@@ -1323,14 +1336,20 @@ def report_channelconfig(): #report *channels cfg part as XYn for each member to
  
 def log2file(msg): # appending a line to the log file
     #rotation should be added if the file becomes too big
-    global LOG, ts
+    global LOG, ts, logaddr
     msg=msg+"\n" # add newline to the end
+    try: # syslog first
+        UDPlogSock.sendto(msg,logaddr)
+    except:
+        print 'could send syslog message to '+repr(logaddr)
+        traceback.print_exc()
+        
     try:
         with open(LOG,"a") as f:
             f.write(msg) # writing 
         return 0
     except:
-        print 'logging problem to',LOG
+        print 'logging problem to file ',LOG
         traceback.print_exc()
         sys.stdout.flush()
         time.sleep(1)
@@ -1464,8 +1483,6 @@ def udpmessage(): # udp message creation based on  buff2server data, does the re
 ##################    
     
    
-
-
     
 def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debugging reason. if locnum==0, then no in: will be sent
     global sendstring,mac,TCW, ts_udpsent, stop
@@ -1497,7 +1514,8 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
     except:
         #print "udp send failure for udpmessage!"
         stop=1 # better to be restarted due to udp send failure
-        msg='script will be stopped due to UDPsock.sendto() failure at '+str(int(ts))
+        TODO='run,dbREcreate.py,0' # igaks juhuks loome andmebaasid valjumisel uuesti!
+        msg='script will be stopped (and databases recreated) due to UDPsock.sendto() failure at '+str(int(ts))
         log2file(msg) # log message to file  
         print(msg)
         traceback.print_exc() # no success for sending
@@ -1507,7 +1525,6 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
     #if ts-ts_boot>250: # ajutine test stop moju kohta  # tmp debug start
     #    stop=1
     #    print 'testing stop' # tmp debug end
-        
         
 
 def push(filename): # send (gzipped) file to supporthost
@@ -1552,6 +1569,7 @@ def push(filename): # send (gzipped) file to supporthost
         print(msg)
         traceback.print_exc()
         return 1
+
 
 
         
@@ -1717,8 +1735,9 @@ def stderr(message): # for android only? from entry.py of mariusz
     sys.stderr.write('%s\n' % message)
 
 
+    
 
-def array2regvalue(array,reg,stamax): # for reporting variables in arrays, not from channel tables
+def array2regvalue(array,reg,stamax): # for reporting variables in arrays as message members together with status, for data not found in channel tables
     member=0
     status=0 # based on value members
     if stamax>2:
@@ -1781,14 +1800,21 @@ tcpaddr=''
 tcpport=0
 tcpmode=1 # if 0, then no tcpmodbus header needed. crc is never needed.
 OSTYPE='' # linux or not?
+ProxyState=1 # modbusproxy connected if 0, not if 1 or more
 MBsta=[0,0,0,0] # modbus device states (ability to communicate). 1 = crc error, 2=device error, 3=usb error, 4 proxy conn error
 MBoldsta=[1,0,0,0] # previous value, begin with no usb conn
 TCW=[0,0,0,0] # array of communication volumes (UDPin, UDPout, TCPin, TCPout), data in bytes. can be restored from server
 
 lockaddr=('127.0.0.1',44444) # only one instance can bind to it, used for locking!
-#UDPlockSock = socket.socket(AF_INET,SOCK_DGRAM) # would be better this way...
 UDPlockSock = socket(AF_INET,SOCK_DGRAM)
 UDPlockSock.settimeout(None)
+
+loghost = '10.0.0.160' # syslog server
+logport=514
+logaddr=(loghost,logport) # global variable for log2file()
+UDPlogSock = socket(AF_INET,SOCK_DGRAM)
+UDPlogSock.settimeout(None) # using for syslog messaging
+
 
 appdelay=30 # 120 # 1s appmain execution interval, reporting all analogue values and counters. NOT DI channels!! DO NOT REPORT AI EVERY TIME!!!
 
@@ -1824,7 +1850,7 @@ todocode=0 # return code
 #pullcode=0 # return code
 startnum=0 # file download pointer
 pulltry=1 # counter for pull() retries
-cfgnum=1 # config retry counter
+cfgnum=0 # config retry counter
 ts=time.mktime(datetime.datetime.now().timetuple()) #seconds now, with comma
 ts_boot=int(ts) # startimise aeg, UPV jaoks
 mac='000000000000' # initial mac to contact the server in case of no valid setup
@@ -1832,6 +1858,11 @@ odiword=-1 # previous di word, on startup do not use
 joru1=''
 joru2=''    
 fore=''
+mbcommresult=0 # modbus slave operation result
+err_aichannels=0 # error counters to sqlread or even stop and dbREcreate
+err_dichannels=0
+err_counters=0
+err_proxy=0
 
 try:
     OSTYPE=os.environ['OSTYPE'] #  == 'linux': # running on linux, not android
@@ -1884,7 +1915,7 @@ try: # is another copy of this script already running?
     log2file(msg)
     print(msg)
     sys.stdout.flush()
-    time.sleep(2)
+    #time.sleep(2)
 
 except: # lock active
     print 'lock active, channelmonitor must be running already' # why is there a delay?
@@ -1917,14 +1948,11 @@ if stop == 0: # lock ok
     tcpwait=2 # alla 0.8 ei tasu, see on proxy tout...  #0.3 # how long to wait for an answer from modbusTCP socket
 
     UDPSock = socket(AF_INET,SOCK_DGRAM)
-    #UDPSock = socket.socket(AF_INET,SOCK_DGRAM) # would be better this way...
     UDPSock.settimeout(0.1) # (0.1) use 1 or more for testing # in () timeout to wait for data from server. defines alsomain loop interval / execution speed!!
 
     host='0.0.0.0' # own ip for udp, should always work, no need for socket binding
     addr = (host,udpport) # itself
-    print 'UDP connection should be OK with',addr
-
-
+    
     conn1tables=['buff2server']
     conn3tables=['aichannels','dichannels','dochannels','counters','chantypes','devices']
     conn4tables=['setup']
@@ -1964,38 +1992,49 @@ if stop == 0: # lock ok
     time.sleep(1) # buff2server delete old if any
 
 
+    #if OSTYPE == 'android':
+    msg='waiting for modbusproxy connection'
+    print(msg)
+    log2file(msg)
+    while socket_restart == 0: # endless retry
+        tcperr = tcperr + 1
+        if tcperr%10 == 0:
+            msg='no tcp connection to modbusproxy'
+            print(msg)
+            log2file(msg)
+            #droid.ttsSpeak(msg) # does not work with every language settings!
+        time.sleep(1)
+    
+    # try to read the wlan mac and sim card serial from the modbusproxy. then the setup can be sent to the server without reading the. 
+    ProxyState=read_proxy() # wlan mac and a few other things to find out / getting here only if tcp conn ok
+    report_setup() # get the mac from setup
 
-    socket_restart() # socket to modbusproxy, first open
-
+    tcperr = 0
+    
+    
     while channelconfig() > 0 and cfgnum<5: # do the setup but not for more than 10 times
-        msg='attempt no'+str(cfgnum+1)+' of 5 to contact proxy and configure devices, retrying in 2 seconds'
+        msg='attempt no '+str(cfgnum+1)+' of 5 to contact proxy and configure devices, retrying in 2 seconds'
         print msg
         log2file(msg)
         cfgnum=cfgnum+1
-        if socket_restart()>0: # tcp conn to modbusproxy
-            MBsta=[2,2,2,2] # no modbus communication possible
-            msg='FAILED to connect modbusproxy!'
-        else: # socket ok
-            msg='modbusproxy connected'
-        print msg
-        log2file(msg)
-        time.sleep(2)
+        
         
     if cfgnum == 5: # failed proxy conn and setup...
         msg='channelconfig() failure! giving up on try '+str(cfgnum)
     else:
-        msg='channelconfig() success on try'+str(cfgnum)
+        msg='channelconfig() success on try '+str(cfgnum)
         MBsta=[0,0,0,0]        
     print(msg)
     log2file(msg)
     sys.stdout.flush()
     time.sleep(1) #
         
-    print 'reporting setup',APVER # must be done twice, the second can be more successful with connection and mac known (tmp hack)
-    time.sleep(1)
-    report_setup() # sending to server on startup
+    #print 'reporting setup',APVER # must be done twice, the second can be more successful with connection and mac known (tmp hack)
+    #time.sleep(1)
+    #report_setup() # sending to server on startup
     SUPPORTHOST='www.itvilla.ee/support/pyapp/'+mac # now there is hope for valid supporthost, not with pyapp/000000000000 # replace with sql data
-
+    
+       
     sendstring=array2regvalue(MBsta,'EXW',2) # adding EXW, EXS to sendstring based on MBsta[]
     sendstring=sendstring+"UPV:0\nUPS:1\nTCW:?\n" # restoring traffic volume from server in case of restart. need to reset it in the beginning of the month.
     udpsend(inumm,int(ts)) # version data # could be put into buff2server too...
@@ -2019,7 +2058,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     ts=time.mktime(datetime.datetime.now().timetuple()) #seconds now, with comma
     MONTS=str(int(ts)) # as integer, without comma
     
-    try: # if anything comes into buffer in 0.1s
+    try: # if anything comes into udp buffer in 0.1s
         setup_change=0 # flag to detect possible setup changes
         data,raddr = UDPSock.recvfrom(buf)
         TCW[0]=TCW[0]+len(data) # adding top the incoming UDP byte counter
@@ -2238,10 +2277,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             #####
                 
             
-            
-                 
-            
-        else:
+        else: # illegal udp msg
             msg="got illegal message (no id) from "+str(addr)+" at "+str(int(ts))+": "+data.replace('\n',' ')  # missing mac
             print(msg)
             log2file(msg)
@@ -2376,7 +2412,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                             channelconfig() # possibly changed setup data to modbus registers
                             report_setup() # let the server know about new setup
                     else:
-                        msg='subprocess failure'
+                        msg=TODO+' execution failure'
                     print(msg)
                     log2file(msg)
                     time.sleep(10)
@@ -2429,7 +2465,22 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         
     # ###### FIRST THE THINGS TO DO MORE OFTEN, TO BE REPORTED ON CHANGE OR renotifydelay TIMEUT (INDIVIDUAL PER SERVICE!) ##########
     time.sleep(0.05) # try to avoid first false di reading after ai readings
-    if read_dichannel_bits() ==0: # successful di read as bitmaps from registers. use together with the make_dichannel_svc()!
+    mbcommresult=read_dichannel_bits()
+    if mbcommresult == 0: # ok, else incr err_dichannels
+        err_dichannels=0
+    else:
+        err_dichannels=err_dichannels+1 # read data into sqlite tables
+    
+    if err_dichannels == 15: #reread dichannels.sql due to consecutive read errors'
+        msg='going to reread dichannels.sql due to consecutive read errors'
+        print(msg)
+        log2file(msg)
+        sqlread('dichannels')  # try to restore the table
+    if err_dichannels == 25: # recreate databases and stop
+        TODO='run,dbREcreate.py,0' # recreate databases before stopping
+        stop=1  # restart via main.py
+            
+    if mbcommresult == 0: # successful di read as bitmaps from registers. use together with the make_dichannel_svc()!
         make_dichannel_svc() # di related service messages creation, insert message data into buff2server to be sent to the server # tmp OFF!
         write_dochannels() # compare the current and new channels values and write the channels to be changed with 
     
@@ -2442,15 +2493,41 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     if ts>ts_interval1+interval1delay: # not to try too often, deal with other things too
         ts_interval1=ts
         #print 'MBoldsta, MBsta',MBoldsta,MBsta,'at',ts # report once in 5 seconds or so
-        if tcperr>4:
-            print 'trying to reopen tcpsocket at',ts
-            ts_tcprestart=ts
+        #read_proxy() #debug to find out wlan activity influence on wlan mac readability
+        
+        if err_dichannels+err_aichannels+err_counters>0: # print channel comm errors
+            print 'modbus errors di ai count',err_dichannels,err_aichannels,err_counters
+        print 
+        if tcperr>4: # restart tcp socket
+            #print 'trying to recreate the databases and restart due to consecutive tcperr at '+str(ts)
+            #print(msg)
+            #log2file(msg)
+            #TODO='run,dbREcreate.py,0'
+            #stop=1
+            #ts_tcprestart=ts
             if socket_restart()>0:
-                tcperr=0 # restart counter        
+                tcperr=0 # restart error counter        
             sys.stdout.flush()
             time.sleep(0.5) # socket restart
-        read_aichannels() # read data into sqlite tables
+            
+        mbcommresult=read_aichannels()
+        if mbcommresult == 0: # ok, else incr err_aichannels
+            err_aichannels=0
+        else:
+            err_aichannels=err_aichannels+1 # read data into sqlite tables
         
+        if err_aichannels == 5: # reread aichannels
+            msg='going to reread aichannels.sql due to consecutive errors'
+            print(msg)
+            log2file(msg)
+            sqlread('aichannels')  # try to restore the table
+        if err_aichannels == 6: # recreate sql databases and stop
+            msg='going to recreate sql databases and stop due to errors'
+            print(msg)
+            log2file(msg)
+            TODO='run,dbREcreate.py,0' # recreate databases before stopping
+            stop=1  # restart via main.py
+            
     # ### NOW the ai and counter values, to be reported once in 30 s or so
     if ts>appdelay+ts_lastappmain:  # time to read analogue registers and counters, not too often
         # this is the appmain part below
@@ -2458,8 +2535,22 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         ts_lastappmain=ts # remember the execution time
   
         make_aichannels_svc() # put ai data into buff2server table to be sent to the server - only if successful reading!
-        read_counters() # read counters (2 registers usually, 32 bit) and put data into buff2server table to be sent to the server - only if successful reading!
-    
+        
+        mbcommresult=read_counters() # read counters (2 registers usually, 32 bit) and put data into buff2server table to be sent to the server - only if successful reading!
+        if mbcommresult == 0: # ok, else incr err_counters
+            err_counters=0
+        else:
+            err_counters=err_counters+1 # read data into sqlite tables
+        
+        if err_counters == 5: # reread counters.sql 
+            msg='going to reread counters.sql due to consecutive read errors'
+            print(msg)
+            log2file(msg)
+            sqlread('counters')  # try to restore the table
+        if err_counters == 6: # recreate databases
+            TODO='run,dbREcreate.py,0' # recreate databases before stopping
+            stop=1  # restart via main.py
+            
         # ############################################################ temporary check to debug di part here, not as often as normally
         #read_dichannel_bits() # di read as bitmaps from registers. use together with the make_dichannel_svc()!
         #make_dichannel_svc() # di related service messages creation, insert message data into buff2server to be sent to the server
@@ -2486,9 +2577,9 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         else:
             sendstring=sendstring+"1\n" # warning
     
-    #send it all away, soe mgo via buff2server, some directly from here below
+    #send it all away, some go via buff2server, some directly from here below
     
-    if sendstring<>'': # there is something to send
+    if sendstring<>'': # there is something to send, use udpsend()
             udpsend(0,int(ts)) # SEND AWAY. no need for server ack so using 0 instead of inumm
 
     # REGULAR MESSAGING RELATED PART END (AI, COUNTERS)   
