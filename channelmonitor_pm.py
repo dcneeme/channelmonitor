@@ -3,12 +3,13 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 28.06.2013'  # using pymodbus!
+APVER='channelmonitor_pm.py 08.07.2013'  # using pymodbus!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
 # 28.06.2013 checking modbusproxy before slave registers and tcperr increase. stop and recreate db if proxy running but slave inaccessible. 
 # 02.07.2013 first check reg 255:0 1
+# 08.07.2013 added some register reads from modbusproxy, incl uuid and simserial. no battery data reading yet. chk proxy version first?
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -91,14 +92,54 @@ def sqlread(table): # drops table and reads from file table.sql that must exist
             
 
             
-def read_proxy(): # read modbus proxy registers, wlan mac most importantly. start only if tcp conn already exists!
-    global mac, USBstate, WLANip
+def read_batt(): # read modbus proxy registers regarding battery. no parameters. output should go into sql tables to get reported!
     i=0
+    global BattVoltage, BattTemperature, BattStatus, BattPlugged, BattHealth, BattCharge
     try:
-        result = client.read_holding_registers(address=310, count=3, unit=255) # wlan mac
-        mac = ''
-        for i in range(3):
-            mac = mac + format("%04x" % result.registers[i]).upper() 
+        result = client.read_holding_registers(address=350, count=7, unit=255) # battery data
+        BattVoltage=result.registers[6] # mV
+        BattTemperature=result.registers[5] # ddegC
+        BattStatus=result.registers[4] # 2 charging, 3 disch, 5 full, 4 not ch, 1 unknown
+        BattPlugged=result.registers[3] # 2 = plugged USB. 
+        BattHealth=result.registers[2] # 2 good, 4 dead, 3 heat, 7 cold, 1 unknown, 6 unknown failure
+        BattCharge=result.registers[1] # 0..100
+        msg='read_batt: Voltage '+str(BattVoltage)+', Temperature '+str(BattTemperature)+', Status '+str(BattStatus)+', Health '+str(BattHealth)+', Plugged '+str(BattPlugged)+', Charge '+str(BattCharge)
+    except:
+        msg='read_batt: FAILURE - not supported by this modbusproxy version?'
+        return 1
+    log2file(msg)
+
+    
+def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. start only if tcp conn already exists! parameter 'all' or anything
+    global mac, USBstate, WLANip, ProxyVersion, UUID, SIMserial
+    i=0
+    WLANip=''
+    SIMserial=''
+    try:
+        result = client.read_holding_registers(address=313, count=2, unit=255) # wlan ip
+        
+        for i in range(2):
+            if WLANip<>'':
+                WLANip=WLANip+'.'
+            WLANip = WLANip+str(result.registers[i]/256)+'.'+str(result.registers[i]&255) 
+        msg='read_proxy: WLANip='+WLANip
+        #log2file(msg) # debug
+        
+        result = client.read_holding_registers(address=200, count=1, unit=255) # USB state
+        USBstate=result.registers[0]
+        msg='read_proxy: USBstate='+str(USBstate) # 1 = running
+        #log2file(msg) # debug
+        
+        if what <> 'all':  # enough what we've read above for regular reading
+            return 0
+            
+        ProxyVersion = read_hexstring(255,0,11) # 44 characters or emtpy
+        
+        UUID = read_hexstring(255,300,8) # 32 char hex string
+        msg='proxyversion '+ProxyVersion+', uuid '+UUID
+        log2file(msg) # debug
+        
+        mac = read_hexstring(255,310,3).upper() # mas as 12 character hex string
         msg='read_proxy: mac='+mac
         log2file(msg) # debug
         if mac[0:3] <> 'D05': # invalid mac for sony xperia
@@ -106,33 +147,49 @@ def read_proxy(): # read modbus proxy registers, wlan mac most importantly. star
             mac='000000000000'
             print(msg)
             log2file(msg)
-            return 2
-        
-        result = client.read_holding_registers(address=313, count=2, unit=255) # wlan ip
-        WLANip=''
-        for i in range(2):
-            if WLANip<>'':
-                WLANip=WLANip+'.'
-            WLANip = WLANip+str(result.registers[i]/256)+'.'+str(result.registers[i]&255) 
-        msg='read_proxy: WLANip='+WLANip
-        log2file(msg) # debug
-        
-        result = client.read_holding_registers(address=200, count=1, unit=255) # USB state
-        USBstate=result.registers[0]
-        msg='read_proxy: USBstate='+str(USBstate) # 1 = running
-        log2file(msg) # debug
+            #return 2
+            
+        result = client.read_holding_registers(address=302, count=10, unit=255) # sim serial
+        if result.registers[0]<>'0':
+            #log2file('simdec: '+repr(result.registers))
+            for i in range(10):
+                if (result.registers[i]/256) == 0:
+                    SIMserial=SIMserial+'F'
+                else:
+                    SIMserial=SIMserial+chr(result.registers[i]/256)
+                if (result.registers[i]&255) == 0:
+                    SIMserial=SIMserial+'F'
+                else:
+                    SIMserial=SIMserial+chr(result.registers[i]&255)
+            log2file('simserial: '+SIMserial)
+        else:
+            log2file('simserial read FAILED: '+repr(result.registers))
+        # add here to add more to read for 'all'
         
         
         return 0
-    except:
+    except Exception,err:
         traceback.print_exc()
-        mac='000000000000'
-        msg='reading mbproxy failed, mac set to '+mac
+        log2file('err: '+repr(err))
+        msg='reading mbproxy failed'
         print(msg)
-        log2file(msg)
         return 1
         
         
+def read_hexstring(mba,regaddr,regcount): # read from modbus register as hex string
+    i=0
+    output=''
+    try:
+        result = client.read_holding_registers(address=regaddr, count=regcount, unit=mba) # wlan mac
+        for i in range(regcount):
+            output = output + format("%04x" % result.registers[i])
+    except Exception,err:
+        traceback.print_exc()
+        log2file('err: '+repr(err))
+        
+    return output # hex string with lenghth 4 x count or empty
+
+
         
 def channelconfig(): # channel setup register setting based on devicetype and channel registers configuration. try to check channel conflicts
     # asuuming thge proxy connection is ok, tested before (ProxyState == 0)
@@ -178,14 +235,13 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
                         msg=msg+' - write_register() PROBLEM!'
                         print(msg)
                         log2file(msg)
-                        sys.stdout.flush()
+                        #sys.stdout.flush()
                         time.sleep(1)
                         #return 1 # continue with others!
                     
                     time.sleep(0.1) # delay needed after write before read!
                     
-                #if read_register(mba,regadd,1) == 0: # read back, can also happen without writing first!
-                try:
+                try: 
                     result = client.read_holding_registers(address=regadd, count=1, unit=mba)
                     tcpdata = result.registers[0] 
                     if register[0] == 'W': # writable
@@ -205,11 +261,11 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
                     #send the actual data to the monitoring server
                     sendstring=sendstring+"R"+str(mba)+"."+str(regadd)+":"+str(tcpdata)+"\n"  # register content reported as decimal
                     
-                except: # else:
+                except Exception,err:
                     msg=' - could not read back the register mba.reg '+str(mba)+'.'+str(regadd)
                     print(msg)
-                    log2file(msg)
-                    sys.stdout.flush()
+                    traceback.print_exc()
+                    log2file('err: '+repr(err))
                     time.sleep(1)
                     return 1
 
@@ -1878,9 +1934,20 @@ err_aichannels=0 # error counters to sqlread or even stop and dbREcreate
 err_dichannels=0
 err_counters=0
 err_proxy=0
-USBstate=255 
+ProxyState=1 # 0 if connected and responsive
+USBstate=255 # 1 if running
+USBoldstate=255 
 WLANip=''
-
+ProxyVersion=''
+UUID=''
+SIMserial=''
+BattVoltage=0 # starting from modbusproxy version from 08.07.2013
+BattTemperature=0
+BattStatus=0
+BattPlugged=0
+BattHealth=0
+BattCharge=0
+ts_USBrun=0 # timestamp to start running usb
 
 try:
     OSTYPE=os.environ['OSTYPE'] #  == 'linux': # running on linux, not android
@@ -2024,9 +2091,11 @@ if stop == 0: # lock ok
         time.sleep(1)
     
     # try to read the wlan mac and sim card serial from the modbusproxy. then the setup can be sent to the server without reading the. 
-    ProxyState=read_proxy() # wlan mac and a few other things to find out / getting here only if tcp conn ok
+    ProxyState=read_proxy('all') # wlan mac and a few other things to find out / getting here only if tcp conn ok
     if ProxyState == 0: # ok
         msg='proxy connected and readable'
+        sendstring=sendstring+'S310:'+mac+'\nS300:'+UUID+'\nS0:'+ProxyVersion+'\nS302:'+SIMserial+'\n'
+        udpsend(0,int(ts)) # no need for ack, thus inumm=0
     else:
         msg='proxy CANNOT be connected and read!'
 
@@ -2061,7 +2130,7 @@ if stop == 0: # lock ok
        
     sendstring=array2regvalue(MBsta,'EXW',2) # adding EXW, EXS to sendstring based on MBsta[]
     sendstring=sendstring+"UPV:0\nUPS:1\nTCW:?\n" # restoring traffic volume from server in case of restart. need to reset it in the beginning of the month.
-    udpsend(inumm,int(ts)) # version data # could be put into buff2server too...
+    udpsend(0,int(ts)) # version data  / no need for ack and deletion from buff2server
 
     sys.stdout.flush()
     time.sleep(1)
@@ -2517,7 +2586,21 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     if ts>ts_interval1+interval1delay: # not to try too often, deal with other things too
         ts_interval1=ts
         #print 'MBoldsta, MBsta',MBoldsta,MBsta,'at',ts # report once in 5 seconds or so
-        read_proxy() # recheck the parameters accessible via modbusproxy
+        ProxyState=read_proxy('') # recheck the basic parameters accessible via modbusproxy
+     
+        if USBstate == 1: # usb state running
+            USBuptime=int(ts-ts_USBrun)
+            tmpstate=0
+            if USBoldstate<>USBstate:
+                ts_USBrun=ts
+        else:
+            USBuptime=0
+            tmpstate=1
+        USBoldstate=USBstate
+        sendstring=sendstring+'UUV:'+str(USBuptime)+'\nUUS:'+str(tmpstate)+'\n'
+        #read_proxy('all') # recheck all parameters accessible via modbusproxy
+        read_batt() # check the battery values and write them into sqlite tables aichannels, dichannels
+            
         
         if err_dichannels+err_aichannels+err_counters>0: # print channel comm errors
             print 'modbus errors di ai count',err_dichannels,err_aichannels,err_counters
