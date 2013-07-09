@@ -113,17 +113,19 @@ def read_batt(): # read modbus proxy registers regarding battery. no parameters.
 def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. start only if tcp conn already exists! parameter 'all' or anything
     global mac, USBstate, WLANip, ProxyVersion, UUID, SIMserial
     i=0
+    WLANoldip=WLANip
     WLANip=''
     SIMserial=''
     try:
         result = client.read_holding_registers(address=313, count=2, unit=255) # wlan ip
-        
         for i in range(2):
             if WLANip<>'':
                 WLANip=WLANip+'.'
             WLANip = WLANip+str(result.registers[i]/256)+'.'+str(result.registers[i]&255) 
-        msg='read_proxy: WLANip='+WLANip
-        #log2file(msg) # debug
+        if WLANoldip<>WLANip:
+            msg='read_proxy: WLANip changed from '+WLANoldip+' to '+WLANip
+            print(msg)
+            log2file(msg) # debug
         
         result = client.read_holding_registers(address=200, count=1, unit=255) # USB state
         USBstate=result.registers[0]
@@ -1412,7 +1414,7 @@ def log2file(msg): # appending a line to the log file
     try: # syslog first
         UDPlogSock.sendto(msg,logaddr)
     except:
-        print 'could send syslog message to '+repr(logaddr)
+        print 'could NOT send syslog message to '+repr(logaddr)
         traceback.print_exc()
         
     try:
@@ -1880,12 +1882,12 @@ lockaddr=('127.0.0.1',44444) # only one instance can bind to it, used for lockin
 UDPlockSock = socket(AF_INET,SOCK_DGRAM)
 UDPlockSock.settimeout(None)
 
-loghost = '10.0.0.160' # syslog server
+loghost = '255.255.255.255' # '10.0.0.255' # '10.0.0.160' # syslog server
 logport=514
 logaddr=(loghost,logport) # global variable for log2file()
 UDPlogSock = socket(AF_INET,SOCK_DGRAM)
 UDPlogSock.settimeout(None) # using for syslog messaging
-
+UDPlogSock.setsockopt(SOL_SOCKET, SO_BROADCAST, 1) # et broadcast lubada
 
 appdelay=30 # 120 # 1s appmain execution interval, reporting all analogue values and counters. NOT DI channels!! DO NOT REPORT AI EVERY TIME!!!
 
@@ -2003,10 +2005,10 @@ try: # is another copy of this script already running?
     #time.sleep(2)
 
 except: # lock active
-    print 'lock active, channelmonitor must be running already' # why is there a delay?
-    msg='try to start while lock is already active at '+str(int(ts))
-    log2file(msg) # log message to file  
     stop=1 # exiting with this below
+    msg='this script will be stopped due to udp lock already active' 
+    log2file(msg) # log message to file  
+    print(msg)
     UDPlockSock.close()
     # mark this event into the log
 
@@ -2572,7 +2574,10 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     if err_dichannels == 25: # recreate databases and stop
         TODO='run,dbREcreate.py,0' # recreate databases before stopping
         stop=1  # restart via main.py
-            
+        msg='script will be stopped (and databases recreated) due to err_dichannels at '+str(int(ts))
+        log2file(msg) # log message to file  
+        print(msg)
+        
     if mbcommresult == 0: # successful di read as bitmaps from registers. use together with the make_dichannel_svc()!
         make_dichannel_svc() # di related service messages creation, insert message data into buff2server to be sent to the server # tmp OFF!
         write_dochannels() # compare the current and new channels values and write the channels to be changed with 
@@ -2629,7 +2634,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             log2file(msg)
             sqlread('aichannels')  # try to restore the table
         if err_aichannels == 6: # recreate sql databases and stop
-            msg='going to recreate sql databases and stop due to errors'
+            msg='going to recreate sql databases and stop due to err_aichannels'
             print(msg)
             log2file(msg)
             TODO='run,dbREcreate.py,0' # recreate databases before stopping
@@ -2657,7 +2662,10 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         if err_counters == 6: # recreate databases
             TODO='run,dbREcreate.py,0' # recreate databases before stopping
             stop=1  # restart via main.py
-            
+            msg='script will be stopped (and databases recreated) due to err_counters at '+str(int(ts))
+            log2file(msg) # log message to file  
+            print(msg)
+        
         # ############################################################ temporary check to debug di part here, not as often as normally
         #read_dichannel_bits() # di read as bitmaps from registers. use together with the make_dichannel_svc()!
         #make_dichannel_svc() # di related service messages creation, insert message data into buff2server to be sent to the server
