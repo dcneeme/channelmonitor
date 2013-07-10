@@ -3,18 +3,19 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 08.07.2013'  # using pymodbus!
+APVER='channelmonitor_pm.py 10.07.2013'  # using pymodbus!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
 # 28.06.2013 checking modbusproxy before slave registers and tcperr increase. stop and recreate db if proxy running but slave inaccessible. 
 # 02.07.2013 first check reg 255:0 1
 # 08.07.2013 added some register reads from modbusproxy, incl uuid and simserial. no battery data reading yet. chk proxy version first?
+# 09.07.2013 syslog broadcast
+# 10.07.2013 check age before reporting to mon, stale data not to be sent!
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
-# separate ai reading and ai sending intervals!
-# send gsm signal level to monitoring!
+# send gsm signal level to monitoring! not available...
 # add sqlite tables test, start dbREcreate together with channelmonitor stopping if it feels necessary to restore normal operation! 
 
 #modbusproxy registers / Only one register can be read  or write at time (registers are sometimes long)
@@ -329,12 +330,12 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
             except:
                 respcode=1
                 
-            MBsta[locmba-1]=respcode
+            MBsta[mba]=respcode
             if respcode == 0: # success
-                tcperr=0
+                MBerr[mba]=0
                 
             else:
-                tcperr=tcperr+1 # increase error count
+                MBerr[mba]=MBerr[mba]+1 # increase error count
                 if respcode ==2:
                     print 'problem with coil',mba,regadd,value,'writing!'
                 
@@ -382,10 +383,10 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
                     respcode=1
                     
                 if respcode == 0: # ok
-                    tcperr=0
+                    MBerr[locmba]=0
                         
                 else:
-                    tcperr=tcperr+1
+                    MBerr[locmba]=MBerr[locmba]+1
                     print 'problem with register',mba,regadd,value,'writing!'
                     #if respcode == 2: # register writing, gets converted to ff00 if value =1
                     #    socket_restart() # close and open tcpsocket
@@ -510,7 +511,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                         result = client.read_holding_registers(address=regadd, count=1, unit=mba)
                         tcpdata = result.registers[0]
                         #print 'value',tcpdata
-                        tcperr=0
+                        MBerr[mba]=0
                             
                         if x1<>x2 and y1<>y2: # sisendandmed usutavad
                             value=(tcpdata-x1)*(y2-y1)/(x2-x1)
@@ -533,7 +534,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                             status=3 # not to be sent status=3! or send member as NaN? 
                     
                     except: # else: # failed reading register, respcode>0
-                        tcperr=tcperr+1 # increase error counter
+                        MBerr[mba]=MBerr[mba]+1 # increase error counter
                         print 'failed to read ai register', mba,regadd,'respcode',respcode
                         if respcode >0:
                             return 1
@@ -595,9 +596,9 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
 
     
 
-def make_aichannels_svc(): # send the ai service messages to the monitoring server
+def make_aichannels_svc(): # send the ai service messages to the monitoring server (only if fresh enough, not older than 2xappdelay)
     locstring="" # local
-    global inumm,ts,ts_inumm,mac,tcpdata, tcperr, udpport
+    global inumm,ts,ts_inumm,mac,tcpdata, tcperr, udpport,appdelay
     mba=0 # lokaalne siin
     val_reg=''
     desc=''
@@ -711,9 +712,13 @@ def make_aichannels_svc(): # send the ai service messages to the monitoring serv
             # put together final service to buff2server
             Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','"+sta_reg+"','"+str(status)+"','"+val_reg+"','"+str(lisa)+"','"+str(int(ts_created))+"','','')" 
             #print "ai Cmd1=",Cmd1 # debug
-            conn1.execute(Cmd1) # write aichannels data into buff2server
- 
-            
+            if (ts-ots  < 2*appdelay): # has been updated lately
+                conn1.execute(Cmd1) # write aichannels data into buff2server
+            else:
+                msg='skipping ai data send (buff2server wr) due to stale aichannels data' # debug
+                log2file(msg) # incl syslog
+                print(msg)
+                
         conn1.commit() # buff2server transaction end
         conn3.commit() # aichannels transaction end
         
@@ -732,7 +737,7 @@ def read_dichannel_bits(): # binary inputs, bit changes to be found and values i
 # reads 16 bits as di or do channels to be reported to monitoring
 # NB the same bits can be of different rows, to be reported in different services. services and their members must be unique
     locstring="" # see on siin lokaalne!
-    global inumm,ts,ts_inumm,mac,tcpdata, tcperr,odiword
+    global inumm,ts,ts_inumm,mac,tcpdata, MBerr,odiword # what if several di extensions??
     mba=0 # lokaalne siin
     val_reg=''
     desc=''
@@ -775,7 +780,7 @@ def read_dichannel_bits(): # binary inputs, bit changes to be found and values i
             try: # if respcode == 0: # successful DI register reading - continuous to catch changes! ################################
                 result = client.read_holding_registers(address=regadd, count=1, unit=mba) # respcode=read_register(mba,regadd,1) # 1 register at the time
                 tcpdata = result.registers[0]  # saab ka bitivaartusi lugeda! 
-                tcperr=0
+                MBerr[mba]=0
                 
                 for srow in cursor3a: # for every mba list the bits in used&to be updated 
                     bit=0
@@ -801,7 +806,7 @@ def read_dichannel_bits(): # binary inputs, bit changes to be found and values i
                         conn3.execute(Cmd3) # write
                 
             except: # else: # respcode>0
-                tcperr=tcperr+1 # increase error counter
+                MBerr[mba]=MBerr[mba]+1 # increase error counter
                 msg='failed to read di register from '+str(mba)+'.'+str(regadd)
                 print(msg) # common problem, keep it shorter
                 log2file(msg)
@@ -825,7 +830,7 @@ def read_dichannel_bits(): # binary inputs, bit changes to be found and values i
 
 
 
-def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only when member(s) changed or for renotification
+def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only when member(s) changed or for renotification AND updated less than 5 s ago
     locstring="" # local
     global inumm,ts,ts_inumm,mac #,tcperr
     mba=0 # local here
@@ -879,7 +884,7 @@ def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only wh
                 #tvalue=0 # test
                 oraw=0
                 ovalue=0 # previous or averaged value
-                ots=0 # previous status
+                ots=0 # previous update timestamp
                 avg=0 # averaging strength, has effect starting from 2
                 desc=''
                 comment=''
@@ -950,8 +955,10 @@ def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only wh
             #print mac,host,udpport,svc_name,sta_reg,status,val_reg,lisa,ts_created,inumm # temporary
             Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','"+sta_reg+"','"+str(sumstatus)+"','"+val_reg+"','"+str(lisa)+"','"+str(int(ts_created))+"','','')" 
             #print "di Cmd1=",Cmd1 # debug
-            conn1.execute(Cmd1) # kirjutamine
- 
+            if (ts-ots  < 2): # has been updated lately, during 2 last seconds
+                conn1.execute(Cmd1) # kirjutamine
+            else:
+                print 'skipping di data send' # debug
         
         conn1.commit() # buff2server
         conn3.commit() # dichannels transaction end
@@ -969,7 +976,7 @@ def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only wh
     
 def read_counters(): # counters, usually 32 bit / 2 registers.
     locstring="" # see on siin lokaalne!
-    global inumm,ts,ts_inumm,mac,tcpdata,tcperr #,MBsta
+    global inumm,ts,ts_inumm,mac,tcpdata,MBerr #,MBsta
     respcode=0
     mba=0 # lokaalne siin
     val_reg=''
@@ -1081,7 +1088,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                             tcpdata = 65536*result.registers[1]+result.registers[0]  # wrong word order for counters in barionet!
                             print 'barionet counter result',tcpdata,'based on',str(result.registers[1]),str(result.registers[0]) # debug
                         
-                        tcperr=0
+                        MBerr[mba]=0
                         raw=tcpdata # let's keep the raw
                         value=tcpdata # will be converted later
                         if lisa<>"":
@@ -1186,7 +1193,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                         
                                                 
                     except: # else: # register read failed, respcode>0
-                        tcperr=tcperr+1
+                        MBerr[mba]=MBerr[mba]+1
                         msg='failed reading or restoring counter register'+str(mba)+'.'+str(regadd)
                         log2file(msg)
                         print(msg)
@@ -1876,13 +1883,14 @@ OSTYPE='' # linux or not?
 ProxyState=1 # modbusproxy connected if 0, not if 1 or more
 MBsta=[0,0,0,0] # modbus device states (ability to communicate). 1 = crc error, 2=device error, 3=usb error, 4 proxy conn error
 MBoldsta=[1,0,0,0] # previous value, begin with no usb conn
+MBerr=[0,0,0,0] # counts the consequtive errors for modbus units (slaves)
 TCW=[0,0,0,0] # array of communication volumes (UDPin, UDPout, TCPin, TCPout), data in bytes. can be restored from server
 
 lockaddr=('127.0.0.1',44444) # only one instance can bind to it, used for locking!
 UDPlockSock = socket(AF_INET,SOCK_DGRAM)
 UDPlockSock.settimeout(None)
 
-loghost = '255.255.255.255' # '10.0.0.255' # '10.0.0.160' # syslog server
+loghost = '10.0.0.160' # syslog server '255.255.255.255' dupl messages?? '10.0.0.255' # 
 logport=514
 logaddr=(loghost,logport) # global variable for log2file()
 UDPlogSock = socket(AF_INET,SOCK_DGRAM)
@@ -2104,7 +2112,7 @@ if stop == 0: # lock ok
     print(msg)
     log2file(msg)
     report_setup() # get the mac from setup
-    tcperr = 0
+    tcperr = 0 # ??
     
     
     while channelconfig() > 0 and cfgnum<5: # do the setup but not for more than 10 times
@@ -2563,24 +2571,24 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     mbcommresult=read_dichannel_bits()
     if mbcommresult == 0: # ok, else incr err_dichannels
         err_dichannels=0
+        make_dichannel_svc() # di related service messages creation, insert message data into buff2server to be sent to the server # tmp OFF!
+        write_dochannels() # compare the current and new channels values and write the channels to be changed with 
     else:
         err_dichannels=err_dichannels+1 # read data into sqlite tables
     
-    if err_dichannels == 15: #reread dichannels.sql due to consecutive read errors'
-        msg='going to reread dichannels.sql due to consecutive read errors'
-        print(msg)
-        log2file(msg)
-        sqlread('dichannels')  # try to restore the table
-    if err_dichannels == 25: # recreate databases and stop
-        TODO='run,dbREcreate.py,0' # recreate databases before stopping
-        stop=1  # restart via main.py
-        msg='script will be stopped (and databases recreated) due to err_dichannels at '+str(int(ts))
-        log2file(msg) # log message to file  
-        print(msg)
-        
-    if mbcommresult == 0: # successful di read as bitmaps from registers. use together with the make_dichannel_svc()!
-        make_dichannel_svc() # di related service messages creation, insert message data into buff2server to be sent to the server # tmp OFF!
-        write_dochannels() # compare the current and new channels values and write the channels to be changed with 
+    if USBstate == 1: # USB running (but errors on channels)
+        if err_dichannels == 15: #reread dichannels.sql due to consecutive read errors'
+            msg='going to reread dichannels.sql due to consecutive read errors'
+            print(msg)
+            log2file(msg)
+            sqlread('dichannels')  # try to restore the table
+        if err_dichannels == 25: # recreate databases and stop
+            TODO='run,dbREcreate.py,0' # recreate databases before stopping
+            stop=1  # restart via main.py
+            msg='script will be stopped (and databases recreated) due to err_dichannels at '+str(int(ts))
+            log2file(msg) # log message to file  
+            print(msg)
+            
     
     if MBsta<>MBoldsta: # change to be reported
         print 'change in MBsta, from  to',MBoldsta,MBsta,'at',ts
@@ -2592,7 +2600,12 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         ts_interval1=ts
         #print 'MBoldsta, MBsta',MBoldsta,MBsta,'at',ts # report once in 5 seconds or so
         ProxyState=read_proxy('') # recheck the basic parameters accessible via modbusproxy
-     
+        if ProxyState == 0:
+            tcperr=0
+            read_batt() # check the battery values and write them into sqlite tables aichannels, dichannels
+        else:
+            tcperr=tcperr+1
+            
         if USBstate == 1: # usb state running
             USBuptime=int(ts-ts_USBrun)
             tmpstate=0
@@ -2602,25 +2615,30 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             USBuptime=0
             tmpstate=1
         USBoldstate=USBstate
-        sendstring=sendstring+'UUV:'+str(USBuptime)+'\nUUS:'+str(tmpstate)+'\n'
+        #sendstring=sendstring+'UUV:'+str(USBuptime)+'\nUUS:'+str(tmpstate)+'\n' # send in appmain with ai values
         #read_proxy('all') # recheck all parameters accessible via modbusproxy
-        read_batt() # check the battery values and write them into sqlite tables aichannels, dichannels
+        
+        if MBerr[0]+MBerr[1]+MBerr[2]+MBerr[3] > 0: # regular notif about modbus problems
+            msg='MBerr '+str(repr(MBerr))+', tcperr '+str(tcperr)+', USBstate '+str(USBstate)
+            log2file(msg)
+            print(msg)
             
         
         if err_dichannels+err_aichannels+err_counters>0: # print channel comm errors
             print 'modbus errors di ai count',err_dichannels,err_aichannels,err_counters
         print 
         if tcperr>4: # restart tcp socket
-            #print 'trying to recreate the databases and restart due to consecutive tcperr at '+str(ts)
-            #print(msg)
-            #log2file(msg)
+            #msg='trying to recreate the databases and restart due to consecutive tcperr at '+str(ts)
+            msg='trying to reconnect to modbusproxy due to consecutive tcperr at '+str(ts)
+            print(msg)
+            log2file(msg)
             #TODO='run,dbREcreate.py,0'
             #stop=1
             #ts_tcprestart=ts
-            if socket_restart()>0:
+            if socket_restart()>0: # failed to connect modbusproxy
                 tcperr=0 # restart error counter        
             sys.stdout.flush()
-            time.sleep(0.5) # socket restart
+            time.sleep(0.5) 
             
         mbcommresult=read_aichannels()
         if mbcommresult == 0: # ok, else incr err_aichannels
