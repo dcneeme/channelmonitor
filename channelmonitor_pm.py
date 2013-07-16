@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 10.07.2013'  # using pymodbus!
+APVER='channelmonitor_pm.py 16.07.2013'  # using pymodbus!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -12,6 +12,7 @@ APVER='channelmonitor_pm.py 10.07.2013'  # using pymodbus!
 # 08.07.2013 added some register reads from modbusproxy, incl uuid and simserial. no battery data reading yet. chk proxy version first?
 # 09.07.2013 syslog broadcast
 # 10.07.2013 check age before reporting to mon, stale data not to be sent!
+# 16.07.2013 added mbproxy watchdog init 120s to reboot in case of tcp comm loss
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -112,7 +113,7 @@ def read_batt(): # read modbus proxy registers regarding battery. no parameters.
 
     
 def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. start only if tcp conn already exists! parameter 'all' or anything
-    global mac, USBstate, WLANip, ProxyVersion, UUID, SIMserial
+    global mac, USBstate, WLANip, ProxyVersion, UUID, SIMserial, stop
     i=0
     WLANoldip=WLANip
     WLANip=''
@@ -146,8 +147,9 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         msg='read_proxy: mac='+mac
         log2file(msg) # debug
         if mac[0:3] <> 'D05': # invalid mac for sony xperia
-            msg=msg+' - invalid! replacing with 000000000000!'
-            mac='000000000000'
+            msg=msg+' - invalid! restarting!'
+            stop=1
+            #mac='000000000000'
             print(msg)
             log2file(msg)
             #return 2
@@ -202,6 +204,15 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
     value=0
     regok=0
     mba_array=[]
+        
+    #try: # proxy watchdog to 120 s, to enable reboot in case of tcp comm loss. takes a rooted phone!
+    #    client.write_register(address=110, value=120, unit=255) # reboot timer
+    #    msg='reboot-if-comm-loss-timer set to 120s'
+    #except:
+    #    msg='writing 255 110 120 to start reboot-if-comm-loss-timer failed'
+    #print(msg)
+    #log2file(msg)
+    # default timeout in proxy 120s, rebooting in vcvase of no tcp connections to proxy
         
     Cmd4="select register,value from setup" 
     cursor4.execute(Cmd4) # read setup variables into cursor
@@ -809,7 +820,7 @@ def read_dichannel_bits(): # binary inputs, bit changes to be found and values i
                 MBerr[mba]=MBerr[mba]+1 # increase error counter
                 msg='failed to read di register from '+str(mba)+'.'+str(regadd)
                 print(msg) # common problem, keep it shorter
-                log2file(msg)
+                #log2file(msg) # too much junk
                 #if respcode >0:
                     #socket_restart() # close and open tcpsocket
                 #    return 2
@@ -1197,7 +1208,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                         msg='failed reading or restoring counter register'+str(mba)+'.'+str(regadd)
                         log2file(msg)
                         print(msg)
-                        traceback.print_exc()    
+                        #traceback.print_exc()    
                 else:
                     msg='counters: out of range mba or regadd '+str(mba)+'.'+str(regadd)
                     log2file(msg)
@@ -1421,12 +1432,13 @@ def log2file(msg): # appending a line to the log file
     try: # syslog first
         UDPlogSock.sendto(msg,logaddr)
     except:
-        print 'could NOT send syslog message to '+repr(logaddr)
-        traceback.print_exc()
+        pass # kui udp ei toimi, ei toimi ka syslog
+        #print 'could NOT send syslog message to '+repr(logaddr)
+        #traceback.print_exc()
         
-    try:
+    try: # file write
         with open(LOG,"a") as f:
-            f.write(msg) # writing 
+            f.write(msg) # writing LOG
         return 0
     except:
         print 'logging problem to file ',LOG
@@ -1592,19 +1604,12 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
         sendstring=''
         ts_udpsent=ts # last successful udp send
     except:
-        #print "udp send failure for udpmessage!"
-        stop=1 # better to be restarted due to udp send failure
-        TODO='run,dbREcreate.py,0' # igaks juhuks loome andmebaasid valjumisel uuesti!
-        msg='script will be stopped (and databases recreated) due to UDPsock.sendto() failure at '+str(int(ts))
-        log2file(msg) # log message to file  
+        msg='udp send failure in udpsend(), for s '+str(ts - ts_udpsent)
+        log2file(msg)
         print(msg)
-        traceback.print_exc() # no success for sending
-        sys.stdout.flush()
-        time.sleep(1)
-    
-    #if ts-ts_boot>250: # ajutine test stop moju kohta  # tmp debug start
-    #    stop=1
-    #    print 'testing stop' # tmp debug end
+        #traceback.print_exc() # no success for sending
+        
+        
         
 
 def push(filename): # send (gzipped) file to supporthost
@@ -1913,8 +1918,6 @@ ts=0 # timestamp s
 ts_created=0 # service creation and inserting into buff2server table
 ts_tried=0 # timestamp for last send trial
 ts_inumm=0 # inumm changed timestamp. to be increased if tyhe same for too long?
-ts_lastappmain=0 # timestamp for last appmain run
-ts_lastnotify=0 # timestamp for last messaging out of registers
 setup_change=0 # flag setup change
 respcode=0 # return code  0=ok, 1=tmp failure, 2=lost socket
 tcpconnfail=0 # flag about proxy conn
@@ -1934,6 +1937,12 @@ pulltry=1 # counter for pull() retries
 cfgnum=0 # config retry counter
 ts=time.mktime(datetime.datetime.now().timetuple()) #seconds now, with comma
 ts_boot=int(ts) # startimise aeg, UPV jaoks
+ts_lastappmain=ts # timestamp for last appmain run
+ts_lastnotify=ts # timestamp for last messaging out of registers
+ts_udpsent=ts # last udp message sent, not received!
+ts_udpgot=ts # udp last received
+# the timestamps above cannot be 0 intially! some will start full reboot!
+
 mac='000000000000' # initial mac to contact the server in case of no valid setup
 odiword=-1 # previous di word, on startup do not use         
 joru1=''
@@ -2013,7 +2022,7 @@ try: # is another copy of this script already running?
     #time.sleep(2)
 
 except: # lock active
-    stop=1 # exiting with this below
+    stop=1 # exiting due to lock
     msg='this script will be stopped due to udp lock already active' 
     log2file(msg) # log message to file  
     print(msg)
@@ -2185,6 +2194,9 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             if id<>mac:
                 print "invalid id in server message from ", addr[0] # this is not for us
                 data='' # destroy the datagram, could be for another controller behind the same connection
+            else:
+                ts_udpgot=ts # timestamp of last udp received
+                
             Cmd1="" 
             Cmd2=""
 
@@ -2391,7 +2403,20 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     
         unsent()  # delete from buff2server the services that are unsent for too long (3*renotifydelay)
         
-        #something to do? 
+        #something to do? chk udp communication first
+        if ts - ts_udpsent > 120: # no udp comm possible for some reason, try to reboot the phone
+            TODO='FULLREBOOT' # send 255 666 dead 
+            msg='system will be rebooted due to udp send failures, TODO '+TODO
+            log2file(msg) # log message to file  
+            print(msg)
+        
+        if ts - ts_udpgot > 1800: # for 30 min no response from udpserver
+            TODO='FULLREBOOT' # try if it helps. if send fails, after 300 s also full reboot
+            msg='trying full reboot to restore incoming udp messages, TODO '
+            print(msg)
+            log2file(msg)
+        
+        
         
         if TODO <> '': # yes, it seems there is something to do
             todocode=todocode+1 # limit the retrycount
@@ -2400,15 +2425,27 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 todocode=report_setup() # general setup from asetup/setup
                 todocode=todocode+report_channelconfig() # iochannels setup from modbus_channels/dichannels, aichannels, counters* - last ytd
                 
-            if TODO == 'REBOOT': # reboot, just the application or android as well??
-                stop=1
+            if TODO == 'REBOOT': # reboot, just the application, not the system like android.
+                stop=1 # cmd:REBOOT
                 todocode=0
                 msg='stopping for reboot due to command at '+str(int(ts))
                 print(msg)   
                 log2file(msg) # log message to file  
                 sys.stdout.flush()
                 time.sleep(1)
-            
+                
+            if TODO == 'FULLREBOOT': # full reboot, NOT just the application. android as well!
+                #stop=1 # cmd:FULLREBOOT
+                try:
+                    msg='started full reboot at '+str(int(ts))
+                    client.write_register(address=666, value=57005, unit=255) # full reboot, value in hex DEAD
+                    todocode=0
+                except:
+                    todocode=1
+                    msg='full reboot failed at '+str(int(ts))
+                print(msg)   
+                log2file(msg) # log message to file  
+                
             if TODO == 'CONFIG': # 
                 todocode=channelconfig() # configure modbus registers according to W... data in setup
             
@@ -2567,7 +2604,8 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     ts=time.mktime(datetime.datetime.now().timetuple()) #time in seconds now
         
     # ###### FIRST THE THINGS TO DO MORE OFTEN, TO BE REPORTED ON CHANGE OR renotifydelay TIMEUT (INDIVIDUAL PER SERVICE!) ##########
-    time.sleep(0.05) # try to avoid first false di reading after ai readings
+    #time.sleep(0.05) # try to avoid first false di reading after ai readings
+    time.sleep(0.01) # try to avoid first false di reading after ai readings
     mbcommresult=read_dichannel_bits()
     if mbcommresult == 0: # ok, else incr err_dichannels
         err_dichannels=0
@@ -2584,7 +2622,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             sqlread('dichannels')  # try to restore the table
         if err_dichannels == 25: # recreate databases and stop
             TODO='run,dbREcreate.py,0' # recreate databases before stopping
-            stop=1  # restart via main.py
+            stop=1  # restart via main.py due to dichannels problem
             msg='script will be stopped (and databases recreated) due to err_dichannels at '+str(int(ts))
             log2file(msg) # log message to file  
             print(msg)
@@ -2656,7 +2694,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             print(msg)
             log2file(msg)
             TODO='run,dbREcreate.py,0' # recreate databases before stopping
-            stop=1  # restart via main.py
+            stop=1  # restart via main.py due to sqlite problem
             
     # ### NOW the ai and counter values, to be reported once in 30 s or so
     if ts>appdelay+ts_lastappmain:  # time to read analogue registers and counters, not too often
@@ -2679,7 +2717,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             sqlread('counters')  # try to restore the table
         if err_counters == 6: # recreate databases
             TODO='run,dbREcreate.py,0' # recreate databases before stopping
-            stop=1  # restart via main.py
+            stop=1  # restart via main.py due to counters problem
             msg='script will be stopped (and databases recreated) due to err_counters at '+str(int(ts))
             log2file(msg) # log message to file  
             print(msg)
@@ -2725,11 +2763,13 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
    
         
     udpmessage() # chk buff2server for messages to send or resend. perhaps not on the fastest possible rate? 
+
+    
+        
     #but immediately if there as a change in dichannels data. no problems executong every time if select chg is fast enough...
     
     #print '.', # dots are signalling the fastest loop executions here - blue led is better...
-    
-    sys.stdout.flush() # to update the log for every dot
+    #sys.stdout.flush() # to update the log for every dot
     
 
 UDPlockSock.close()
