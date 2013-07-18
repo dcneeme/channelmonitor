@@ -219,7 +219,7 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
     conn4.commit()
     for row in cursor4:
         regok=0
-        msg='setup record '+repr(row)
+        msg='setup record '+str(repr(row))
         print(msg)
         log2file(msg)
         register=row[0] # contains W<mba>.<regadd> or R<mba>.<regadd>
@@ -829,10 +829,12 @@ def read_dichannel_bits(): # binary inputs, bit changes to be found and values i
         conn3.commit()  # dichannel-bits transaction end 
         return 0
 
-    except:
-        print 'there was a problem with dichannels data reading or processing!'
+    except Exception,err:
         traceback.print_exc()
-        sys.stdout.flush()
+        log2file('err: '+repr(err))
+        msg='there was a problem with dichannels data reading or processing!'
+        log2file(msg)
+        print(msg)
         time.sleep(1)
         return 1 
     
@@ -873,10 +875,11 @@ def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only wh
             chg=int(row[1]) # change bitflag here, 0 or 1
             ts_last=int(row[2]) # last reporting time
             if chg == 1: # message due to bichannel state change
-                print 'DI service to be reported due to change:',val_reg # ,'while last reporting was',ts-ts_last,'s ago, ts now=',ts
+                msg='DI service to be reported due to change: '+val_reg 
             else:
-                print 'DI service',val_reg,'to be REreported, last reporting was',ts-ts_last,'s ago' # , ts now=',ts
-                
+                msg='DI service '+val_reg+' to be REreported, last reporting was '+str(ts-ts_last)+' s ago' # , ts now=',ts
+            print(msg)
+            log2file(msg)            
             #mcount=int(row[1]) # changed service member count
             sta_reg=val_reg[:-1]+"S" # service status register name
             svc_name='' # unused? but must exist for insertion int obuff2server
@@ -974,11 +977,13 @@ def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only wh
         conn1.commit() # buff2server
         conn3.commit() # dichannels transaction end
             
-    except: 
-        print 'problem with reading dichannels'
-        sys.stdout.flush()
-        #time.sleep(1)
-        #traceback.print_exc()
+    except Exception,err:
+        traceback.print_exc()
+        log2file('err: '+repr(err))
+        msg='there was a problem with make_dichannel_svc()!'
+        print(msg)
+        log2file(msg)
+        
         
 #make_dichannel_svc() lopp
 
@@ -1604,7 +1609,7 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
         sendstring=''
         ts_udpsent=ts # last successful udp send
     except:
-        msg='udp send failure in udpsend(), for s '+str(ts - ts_udpsent)
+        msg='udp send failure in udpsend(), lasting s '+str(int(ts - ts_udpsent))
         log2file(msg)
         print(msg)
         #traceback.print_exc() # no success for sending
@@ -1895,7 +1900,7 @@ lockaddr=('127.0.0.1',44444) # only one instance can bind to it, used for lockin
 UDPlockSock = socket(AF_INET,SOCK_DGRAM)
 UDPlockSock.settimeout(None)
 
-loghost = '10.0.0.160' # syslog server '255.255.255.255' dupl messages?? '10.0.0.255' # 
+loghost = '255.255.255.255' # dupl messages?? '10.0.0.255' # '10.0.0.160'  # syslog server  - to one host does not duplicate.
 logport=514
 logaddr=(loghost,logport) # global variable for log2file()
 UDPlogSock = socket(AF_INET,SOCK_DGRAM)
@@ -1905,7 +1910,7 @@ UDPlogSock.setsockopt(SOL_SOCKET, SO_BROADCAST, 1) # et broadcast lubada
 appdelay=30 # 120 # 1s appmain execution interval, reporting all analogue values and counters. NOT DI channels!! DO NOT REPORT AI EVERY TIME!!!
 
 retrydelay=5 # after 5 s resend is possible if row still in buffer
-renotifydelay=240 # send again the DI values after that time period even if not changed. but the changed di and do values are sent immediately!
+renotifydelay=60 # send again the DI values after that time period even if not changed. but the changed di and do values are sent immediately!
 
 sendstring="" # datagram to be sent
 lisa="" # multivalue string member 
@@ -2699,7 +2704,9 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     # ### NOW the ai and counter values, to be reported once in 30 s or so
     if ts>appdelay+ts_lastappmain:  # time to read analogue registers and counters, not too often
         # this is the appmain part below
-        print "appmain start at",ts,">",appdelay+ts_lastappmain,"appdelay",appdelay
+        msg="appmain start at"+str(int(ts))+", time to renotify prg var "+str(int(ts-ts_lastnotify))
+        print(msg)
+        log2file(msg)
         ts_lastappmain=ts # remember the execution time
   
         make_aichannels_svc() # put ai data into buff2server table to be sent to the server - only if successful reading!
@@ -2731,8 +2738,13 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         
     # ### resending the unchanged di values just to avoid unknown state for them oin nagios, once in 4 minutes or so
     if ts>renotifydelay+ts_lastnotify:  # regular messaging not related to registers but rather to program variables
-        print "renotify application variables due to ts",ts,">",renotifydelay+ts_lastnotify,", renotifydelay",renotifydelay
+        msg="renotify application variables due to ts "+str(ts)+">"+str(renotifydelay+ts_lastnotify)+", renotifydelay "+str(renotifydelay)
+        print(msg)
+        log2file(msg)
         ts_lastnotify=ts # remember timestamp
+        
+        make_dichannel_svc() # test to fix renotify
+        
         
         sendstring=sendstring+array2regvalue(MBsta,'EXW',2) # EXW, EXS reporting periodical based on MBsta[] for up to 4 modbus addresses
         sendstring=sendstring+array2regvalue(TCW,'TCW',0) # traffic TCW[] reporting periodical, no status above 0
