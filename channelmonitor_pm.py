@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 16.07.2013'  # using pymodbus!
+APVER='channelmonitor_pm.py 16.07.2013'  # using pymodbus! esialgu jamab, ei korda di!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -969,10 +969,12 @@ def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only wh
             #print mac,host,udpport,svc_name,sta_reg,status,val_reg,lisa,ts_created,inumm # temporary
             Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','"+sta_reg+"','"+str(sumstatus)+"','"+val_reg+"','"+str(lisa)+"','"+str(int(ts_created))+"','','')" 
             #print "di Cmd1=",Cmd1 # debug
-            if (ts-ots  < 2): # has been updated lately, during 2 last seconds
-                conn1.execute(Cmd1) # kirjutamine
-            else:
-                print 'skipping di data send' # debug
+            
+            #juhitav filter oleks vaja et teatud andurite/signaalide tomblemisi valtida. 
+            #if (ts-ots > 2): # has NOT been updated lately, during 2 last seconds - ei ole hea, voib viimase oleku edastamata jatta!
+            conn1.execute(Cmd1) # kirjutamine - juhitav filter oleks vaja et teatud andurite/signaalide tomblemisi valtida.
+            #else:
+            #    print 'skipping di data '+sta_reg+'/'+val_reg+' send due to ts-ots <=2:'+str(ts-ots) # debug
         
         conn1.commit() # buff2server
         conn3.commit() # dichannels transaction end
@@ -1907,10 +1909,10 @@ UDPlogSock = socket(AF_INET,SOCK_DGRAM)
 UDPlogSock.settimeout(None) # using for syslog messaging
 UDPlogSock.setsockopt(SOL_SOCKET, SO_BROADCAST, 1) # et broadcast lubada
 
-appdelay=30 # 120 # 1s appmain execution interval, reporting all analogue values and counters. NOT DI channels!! DO NOT REPORT AI EVERY TIME!!!
+appdelay=30 # 120 # 1s appmain execution interval, reporting all analogue values and counters. NOT DI channels!! 
 
 retrydelay=5 # after 5 s resend is possible if row still in buffer
-renotifydelay=60 # send again the DI values after that time period even if not changed. but the changed di and do values are sent immediately!
+renotifydelay=240 # send again the DI values after that time period even if not changed. but the changed di and do values are sent immediately!
 
 sendstring="" # datagram to be sent
 lisa="" # multivalue string member 
@@ -1973,7 +1975,7 @@ BattHealth=0
 BattCharge=0
 ts_USBrun=0 # timestamp to start running usb
 
-try:
+try: # is it linux?
     OSTYPE=os.environ['OSTYPE'] #  == 'linux': # running on linux, not android
     print 'seems to run on linux'
 
@@ -1981,18 +1983,21 @@ try:
         print sys.argv[1],sys.argv[2] # <addr:ip> <sql_dir>
     except:
         print ' / parameters (socket and sql_dir) needed to run on linux!' 
+        traceback.print_exc()
         sys.exit()
         
     try:
         tcpport=int(sys.argv[1].split(':')[1]) # tcpport=502 # std modbusTCP port # set before
         tcpaddr=sys.argv[1].split(':')[0] # "10.0.0.11" # ip to use for modbusTCP
+        print 'using',tcpaddr,tcpport
     except:
         print 'invalid address:port given',tcpaddr,tcpport
+        traceback.print_exc()
         sys.exit()
         
     from sqlite3 import dbapi2 as sqlite3 # in linux
     os.chdir(sys.argv[2]) # ('/srv/scada/acomm/sql')
-    #print os.getcwd()
+    print os.getcwd()
     
 except: # android
     OSTYPE='android'
@@ -2012,7 +2017,8 @@ except: # android
     import termios
     import sqlite3
     os.chdir('/sdcard/sl4a/scripts/d4c')
-    #print os.getcwd()
+    print os.getcwd()
+    #traceback.print_exc()  # debug
     
 print 'current dir',os.getcwd()
     
@@ -2609,8 +2615,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     ts=time.mktime(datetime.datetime.now().timetuple()) #time in seconds now
         
     # ###### FIRST THE THINGS TO DO MORE OFTEN, TO BE REPORTED ON CHANGE OR renotifydelay TIMEUT (INDIVIDUAL PER SERVICE!) ##########
-    #time.sleep(0.05) # try to avoid first false di reading after ai readings
-    time.sleep(0.01) # try to avoid first false di reading after ai readings
+    time.sleep(0.05) # try to avoid first false di reading after ai readings
     mbcommresult=read_dichannel_bits()
     if mbcommresult == 0: # ok, else incr err_dichannels
         err_dichannels=0
@@ -2781,7 +2786,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     #but immediately if there as a change in dichannels data. no problems executong every time if select chg is fast enough...
     
     #print '.', # dots are signalling the fastest loop executions here - blue led is better...
-    #sys.stdout.flush() # to update the log for every dot
+    sys.stdout.flush() # to update the log for every dot - this alone is really needed to see the real time log
     
 
 UDPlockSock.close()
