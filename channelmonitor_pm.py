@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 16.07.2013'  # using pymodbus! esialgu jamab, ei korda di!
+APVER='channelmonitor_pm.py 20.07.2013'  # using pymodbus! esialgu jamab, ei korda di!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -13,6 +13,8 @@ APVER='channelmonitor_pm.py 16.07.2013'  # using pymodbus! esialgu jamab, ei kor
 # 09.07.2013 syslog broadcast
 # 10.07.2013 check age before reporting to mon, stale data not to be sent!
 # 16.07.2013 added mbproxy watchdog init 120s to reboot in case of tcp comm loss
+# 20.07.2013 fixed missing di renotifications (failed filtering attempt). added some voice messages (on reboot and channel problems). release candidate.
+   #  main loop speak is ok, but errors and ending mesages later do not function for some reason!
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -129,7 +131,7 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
             print(msg)
             log2file(msg) # debug
         
-        result = client.read_holding_registers(address=200, count=1, unit=255) # USB state
+        result = client.read_holding_registers(address=200, count=1, unit=255) # USB state. 1 = running, disconnected
         USBstate=result.registers[0]
         msg='read_proxy: USBstate='+str(USBstate) # 1 = running
         #log2file(msg) # debug
@@ -146,13 +148,20 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         mac = read_hexstring(255,310,3).upper() # mas as 12 character hex string
         msg='read_proxy: mac='+mac
         log2file(msg) # debug
-        if mac[0:3] <> 'D05': # invalid mac for sony xperia
-            msg=msg+' - invalid! restarting!'
-            stop=1
-            #mac='000000000000'
+        if OSTYPE == 'android':
+            while mac[0:3] <> 'D05': # invalid mac for sony xperia after reboot when wlan was off before reboot
+                msg=' - invalid mac! switching wireless on and off'
+                print(msg)
+                log2file(msg)
+                droid.ttsSpeak(msg)
+                time.sleep(8)
+                subprocess.Popen(['su', '-c', 'ip link set dev wlan0 up'], shell=True, stdout=DEVNULL, stderr=DEVNULL)  # temporarely on
+                time.sleep(8)
+                subprocess.Popen(['su', '-c', 'ip link set dev wlan0 down'], shell=True, stdout=DEVNULL, stderr=DEVNULL) # off again
+            msg='got the correct mac '+mac
             print(msg)
             log2file(msg)
-            #return 2
+            droid.ttsSpeak(msg)    
             
         result = client.read_holding_registers(address=302, count=10, unit=255) # sim serial
         if result.registers[0]<>'0':
@@ -819,8 +828,9 @@ def read_dichannel_bits(): # binary inputs, bit changes to be found and values i
             except: # else: # respcode>0
                 MBerr[mba]=MBerr[mba]+1 # increase error counter
                 msg='failed to read di register from '+str(mba)+'.'+str(regadd)
-                print(msg) # common problem, keep it shorter
-                #log2file(msg) # too much junk
+                if MBerr[mba] == 1: # first error
+                    print(msg) # di problem (first only)
+                    log2file(msg) # di problem (first only)
                 #if respcode >0:
                     #socket_restart() # close and open tcpsocket
                 #    return 2
@@ -2026,7 +2036,7 @@ print 'current dir',os.getcwd()
     
 try: # is another copy of this script already running?
     UDPlockSock.bind(lockaddr)
-    msg='\n\n'+APVER+' starting at '+str(int(ts))
+    msg='\n'+APVER+' starting at '+str(int(ts))
     log2file(msg)
     print(msg)
     sys.stdout.flush()
@@ -2168,10 +2178,11 @@ if stop == 0: # lock ok
     print 'reporting setup again' # must be done twice, the second can be more successful with connection and mac known (tmp hack)
     report_setup() # sending some data from asetup/setup to server on startup
     report_channelconfig() # sending some data from modbuschannels/*channels to server on startup
-    msg='starting the main loop at '+str(int(ts))+'. mac '+mac+', saddr '+str(repr(saddr))+', modbusproxy '+tcpaddr+':'+str(tcpport)
+    msg='starting the main loop' #  at '+str(int(ts))+'. mac '+mac+', saddr '+str(repr(saddr))+', modbusproxy '+tcpaddr+':'+str(tcpport)
     print(msg)
     log2file(msg) # log message to file  
-
+    if OSTYPE == 'android':
+        droid.ttsSpeak(msg)
     
     
     
@@ -2417,16 +2428,20 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         #something to do? chk udp communication first
         if ts - ts_udpsent > 120: # no udp comm possible for some reason, try to reboot the phone
             TODO='FULLREBOOT' # send 255 666 dead 
-            msg='system will be rebooted due to udp send failures, TODO '+TODO
+            msg='trying full reboot to restore udp messages sending'
             log2file(msg) # log message to file  
             print(msg)
-        
+            if OSTYPE == 'android':
+                droid.ttsSpeak(msg)
+                
         if ts - ts_udpgot > 1800: # for 30 min no response from udpserver
             TODO='FULLREBOOT' # try if it helps. if send fails, after 300 s also full reboot
-            msg='trying full reboot to restore incoming udp messages, TODO '
+            msg='trying full reboot to restore incoming udp messages'
             print(msg)
             log2file(msg)
-        
+            if OSTYPE == 'android':
+                droid.ttsSpeak(msg)
+            
         
         
         if TODO <> '': # yes, it seems there is something to do
@@ -2439,10 +2454,12 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             if TODO == 'REBOOT': # reboot, just the application, not the system like android.
                 stop=1 # cmd:REBOOT
                 todocode=0
-                msg='stopping for reboot due to command at '+str(int(ts))
+                msg='stopping for reboot due to command'
                 print(msg)   
                 log2file(msg) # log message to file  
                 sys.stdout.flush()
+                if OSTYPE == 'android':
+                    droid.ttsSpeak(msg)
                 time.sleep(1)
                 
             if TODO == 'FULLREBOOT': # full reboot, NOT just the application. android as well!
@@ -2633,9 +2650,11 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         if err_dichannels == 25: # recreate databases and stop
             TODO='run,dbREcreate.py,0' # recreate databases before stopping
             stop=1  # restart via main.py due to dichannels problem
-            msg='script will be stopped (and databases recreated) due to err_dichannels at '+str(int(ts))
+            msg='script will be stopped (and databases recreated) due to errors on binary inputs_dichannels'
             log2file(msg) # log message to file  
             print(msg)
+            if OSTYPE == 'android':
+                droid.ttsSpeak(msg)
             
     
     if MBsta<>MBoldsta: # change to be reported
@@ -2659,9 +2678,17 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             tmpstate=0
             if USBoldstate<>USBstate:
                 ts_USBrun=ts
-        else:
+        else: # not running
             USBuptime=0
             tmpstate=1
+            if USBstate<>0 and client.read_holding_registers(address=302, count=10, unit=255).registers[0] > 300: # reboot to attempt usb restore, but not if disconnected
+                msg='rebooting in an attempt to restore USB connectivity'
+                print(msg)
+                log2file(msg)
+                if OSTYPE == 'android':
+                    droid.ttsSpeak(msg)
+                TODO=FULLREBOOT # attempt to restore USB conn
+                
         USBoldstate=USBstate
         #sendstring=sendstring+'UUV:'+str(USBuptime)+'\nUUS:'+str(tmpstate)+'\n' # send in appmain with ai values
         #read_proxy('all') # recheck all parameters accessible via modbusproxy
@@ -2700,11 +2727,13 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             log2file(msg)
             sqlread('aichannels')  # try to restore the table
         if err_aichannels == 6: # recreate sql databases and stop
-            msg='going to recreate sql databases and stop due to err_aichannels'
+            msg='going to recreate sql databases and stop due to errors with analogue channels'
             print(msg)
             log2file(msg)
             TODO='run,dbREcreate.py,0' # recreate databases before stopping
             stop=1  # restart via main.py due to sqlite problem
+            if OSTYPE == 'android':
+                droid.ttsSpeak(msg)
             
     # ### NOW the ai and counter values, to be reported once in 30 s or so
     if ts>appdelay+ts_lastappmain:  # time to read analogue registers and counters, not too often
@@ -2730,10 +2759,12 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         if err_counters == 6: # recreate databases
             TODO='run,dbREcreate.py,0' # recreate databases before stopping
             stop=1  # restart via main.py due to counters problem
-            msg='script will be stopped (and databases recreated) due to err_counters at '+str(int(ts))
+            msg='script will be stopped (and databases recreated) due to errors with counters'
             log2file(msg) # log message to file  
             print(msg)
-        
+            if OSTYPE == 'android':
+                droid.ttsSpeak(msg)
+            
         # ############################################################ temporary check to debug di part here, not as often as normally
         #read_dichannel_bits() # di read as bitmaps from registers. use together with the make_dichannel_svc()!
         #make_dichannel_svc() # di related service messages creation, insert message data into buff2server to be sent to the server
@@ -2790,10 +2821,12 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     
 
 UDPlockSock.close()
-msg='script'+sys.argv[0]+' has ended due to stop>0'
+msg='script ending due to stop signal'
 print(msg)
 log2file(msg)
 sys.stdout.flush()
+if OSTYPE == 'android':
+    droid.ttsSpeak(msg)
 time.sleep(2) 
             
 #main end. main frequency is defined by udp socket timeout!
