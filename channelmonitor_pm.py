@@ -15,6 +15,7 @@ APVER='channelmonitor_pm.py 20.07.2013'  # using pymodbus! esialgu jamab, ei kor
 # 16.07.2013 added mbproxy watchdog init 120s to reboot in case of tcp comm loss
 # 20.07.2013 fixed missing di renotifications (failed filtering attempt). added some voice messages (on reboot and channel problems). release candidate.
    #  main loop speak is ok, but errors and ending mesages later do not function for some reason!
+   #    20.07.2013 broadcast based on wlan ip, works also with hotspot (but that goes off with reboot). ssid dp, passwd hvvpumpla
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -44,6 +45,18 @@ APVER='channelmonitor_pm.py 20.07.2013'  # using pymodbus! esialgu jamab, ei kor
 # ### procedures ######################
     
     
+def read_long(mba, reg, len): # read multiple registrer to form one resulting value. no good for barionet counters (with wrong order)!
+    result = client.read_holding_registers(address=reg, count=len, unit=mba)
+    if (isinstance(result, ReadHoldingRegistersResponse)):
+        t = 0
+        for i in range(0, len, 1):
+            t = (t << 16) + result.registers[i]
+        return t
+    else:
+        return -1 # assuming no negative result normally
+        
+                
+                
 def subexec(exec_cmd,submode): # returns output of a subprocess, like a shell script or command
     #proc=subprocess.Popen([exec_cmd], shell=True, stdout=DEVNULL, stderr=DEVNULL)
     if submode == 0: # return exit status, 0 or more
@@ -115,8 +128,9 @@ def read_batt(): # read modbus proxy registers regarding battery. no parameters.
 
     
 def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. start only if tcp conn already exists! parameter 'all' or anything
-    global mac, USBstate, WLANip, ProxyVersion, UUID, SIMserial, stop
+    global mac, USBstate, USBuptime, PhoneUptime, ProxyUptime, WLANip, ProxyVersion, UUID, SIMserial, stop, logaddr, loghost, logport, GSMlevel, WLANlevel, OSTYPE
     i=0
+    tmparray=[]
     WLANoldip=WLANip
     WLANip=''
     SIMserial=''
@@ -125,18 +139,36 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         for i in range(2):
             if WLANip<>'':
                 WLANip=WLANip+'.'
-            WLANip = WLANip+str(result.registers[i]/256)+'.'+str(result.registers[i]&255) 
+            if i == 1: # second half
+                loghost=WLANip+str(result.registers[i]/256)+'.255'
+            WLANip = WLANip+str(result.registers[i]/256)+'.'+str(result.registers[i]&255)
+
         if WLANoldip<>WLANip:
-            msg='read_proxy: WLANip changed from '+WLANoldip+' to '+WLANip
+            msg='read_proxy: WLAN ip changed from '+WLANoldip+' to '+WLANip+', broadcast to '+loghost
             print(msg)
             log2file(msg) # debug
-        
+            if OSTYPE == 'android':
+                droid.ttsSpeak('wireless ip has changed, broadcast to '+loghost)
+            logaddr=(loghost,logport) # global variable change
+            
         result = client.read_holding_registers(address=200, count=1, unit=255) # USB state. 1 = running, disconnected
         USBstate=result.registers[0]
         msg='read_proxy: USBstate='+str(USBstate) # 1 = running
         #log2file(msg) # debug
         
-        if what <> 'all':  # enough what we've read above for regular reading
+        if USBstate == 1:
+            USBuptime=int(read_long(255,205,4)/1000) # USBuptime in s, result - 1 if error
+        else:
+            USBuptime=0 
+        
+        PhoneUptime=int(read_long(255,360,4)/1000)
+        ProxyUptime=int(read_long(255,201,4)/1000)
+        GSMlevel=client.read_holding_registers(address=304, count=1, unit=255).registers[0]*2-113 # 0..31, 99? converted to dBm read one at the time! -115=flight_mode!
+        WLANlevel=client.read_holding_registers(address=305, count=1, unit=255).registers[0]-65536  # converted to negative number. read one at the time! 
+        msg='phoneuptime '+str(PhoneUptime)+', proxyuptime '+str(ProxyUptime)+', gsmlevel '+str(GSMlevel)+', wlanlevel '+str(WLANlevel) # levels dBm
+        log2file(msg) # debug
+        
+        if what <> 'all':  # enough what we've read above for regular reading #########################
             return 0
             
         ProxyVersion = read_hexstring(255,0,11) # 44 characters or emtpy
@@ -161,7 +193,7 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
             msg='got the correct mac '+mac
             print(msg)
             log2file(msg)
-            droid.ttsSpeak(msg)    
+            droid.ttsSpeak('got the mac address ending with '+mac[-4:])    
             
         result = client.read_holding_registers(address=302, count=10, unit=255) # sim serial
         if result.registers[0]<>'0':
@@ -179,6 +211,7 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         else:
             log2file('simserial read FAILED: '+repr(result.registers))
         # add here to add more to read for 'all'
+        
         
         
         return 0
@@ -1894,8 +1927,9 @@ import gzip
 import tarfile
 import requests # for file upload
 #import logging
+
 from pymodbus.client.sync import ModbusTcpClient
-#client = ModbusTcpClient(host=ip, port=port);
+from pymodbus.register_read_message import *
 
 host='0.0.0.0' # own ip for udp comm, should always work to send/receive udp data to the server, without socket binding
 tcpaddr=''
@@ -1912,7 +1946,7 @@ lockaddr=('127.0.0.1',44444) # only one instance can bind to it, used for lockin
 UDPlockSock = socket(AF_INET,SOCK_DGRAM)
 UDPlockSock.settimeout(None)
 
-loghost = '255.255.255.255' # dupl messages?? '10.0.0.255' # '10.0.0.160'  # syslog server  - to one host does not duplicate.
+loghost = '255.255.255.255' # find out the wlan ip and use x.x.x.255 as the syslog server ip for broadcast. should work for hotspot too.
 logport=514
 logaddr=(loghost,logport) # global variable for log2file()
 UDPlogSock = socket(AF_INET,SOCK_DGRAM)
@@ -1973,6 +2007,12 @@ err_proxy=0
 ProxyState=1 # 0 if connected and responsive
 USBstate=255 # 1 if running
 USBoldstate=255 
+USBuptime=0 # readable from modbusproxy
+PhoneUptime=0 # readable from modbusproxy
+ProxyUptime=0 # readable from modbusproxy
+AppUptime=0 # ts_boot alusel, py rakenduse oma
+GSMlevel=0 # 0..31, 99?
+WLANlevel=0
 WLANip=''
 ProxyVersion=''
 UUID=''
@@ -2428,19 +2468,21 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         #something to do? chk udp communication first
         if ts - ts_udpsent > 120: # no udp comm possible for some reason, try to reboot the phone
             TODO='FULLREBOOT' # send 255 666 dead 
-            msg='trying full reboot to restore udp messages sending'
+            msg='trying full reboot to restore outgoing monitoring messaging'
             log2file(msg) # log message to file  
             print(msg)
             if OSTYPE == 'android':
                 droid.ttsSpeak(msg)
+                time.sleep(10)
                 
         if ts - ts_udpgot > 1800: # for 30 min no response from udpserver
             TODO='FULLREBOOT' # try if it helps. if send fails, after 300 s also full reboot
-            msg='trying full reboot to restore incoming udp messages'
+            msg='trying full reboot to restore monitoring connectivity'
             print(msg)
             log2file(msg)
             if OSTYPE == 'android':
                 droid.ttsSpeak(msg)
+                time.sleep(10)
             
         
         
@@ -2460,6 +2502,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 sys.stdout.flush()
                 if OSTYPE == 'android':
                     droid.ttsSpeak(msg)
+                    time.sleep(10)
                 time.sleep(1)
                 
             if TODO == 'FULLREBOOT': # full reboot, NOT just the application. android as well!
@@ -2655,7 +2698,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             print(msg)
             if OSTYPE == 'android':
                 droid.ttsSpeak(msg)
-            
+                time.sleep(10)
     
     if MBsta<>MBoldsta: # change to be reported
         print 'change in MBsta, from  to',MBoldsta,MBsta,'at',ts
@@ -2670,28 +2713,11 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         if ProxyState == 0:
             tcperr=0
             read_batt() # check the battery values and write them into sqlite tables aichannels, dichannels
+            #msg='outside read_proxy: phoneuptime '+str(PhoneUptime)+', proxyuptime '+str(ProxyUptime)+', gsmlevel '+str(GSMlevel)+', wlanlevel '+str(WLANlevel)
+            #log2file(msg) # debug
         else:
             tcperr=tcperr+1
             
-        if USBstate == 1: # usb state running
-            USBuptime=int(ts-ts_USBrun)
-            tmpstate=0
-            if USBoldstate<>USBstate:
-                ts_USBrun=ts
-        else: # not running
-            USBuptime=0
-            tmpstate=1
-            if USBstate<>0 and client.read_holding_registers(address=302, count=10, unit=255).registers[0] > 300: # reboot to attempt usb restore, but not if disconnected
-                msg='rebooting in an attempt to restore USB connectivity'
-                print(msg)
-                log2file(msg)
-                if OSTYPE == 'android':
-                    droid.ttsSpeak(msg)
-                TODO=FULLREBOOT # attempt to restore USB conn
-                
-        USBoldstate=USBstate
-        #sendstring=sendstring+'UUV:'+str(USBuptime)+'\nUUS:'+str(tmpstate)+'\n' # send in appmain with ai values
-        #read_proxy('all') # recheck all parameters accessible via modbusproxy
         
         if MBerr[0]+MBerr[1]+MBerr[2]+MBerr[3] > 0: # regular notif about modbus problems
             msg='MBerr '+str(repr(MBerr))+', tcperr '+str(tcperr)+', USBstate '+str(USBstate)
@@ -2734,13 +2760,14 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             stop=1  # restart via main.py due to sqlite problem
             if OSTYPE == 'android':
                 droid.ttsSpeak(msg)
-            
+                time.sleep(10)
+                
     # ### NOW the ai and counter values, to be reported once in 30 s or so
     if ts>appdelay+ts_lastappmain:  # time to read analogue registers and counters, not too often
         # this is the appmain part below
-        msg="appmain start at"+str(int(ts))+", time to renotify prg var "+str(int(ts-ts_lastnotify))
+        msg='appmain start at'+str(int(ts))+', time to renotify prg var '+str(int(ts-ts_lastnotify))+', syslog to '+loghost
         print(msg)
-        log2file(msg)
+        log2file(msg) # debug
         ts_lastappmain=ts # remember the execution time
   
         make_aichannels_svc() # put ai data into buff2server table to be sent to the server - only if successful reading!
@@ -2790,13 +2817,42 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         
         #if ts>ts_boot + 20: # to avoid double messsaging on startup
         sendstring=sendstring+array2regvalue(MBsta,'EXW',2) # EXW, EXS reporting even if not changed
-        sendstring=sendstring+"UPV:"+str(int(ts-ts_boot))+"\nUPS:" # uptime value in seconds
-        if int(ts-ts_boot)>1800: # status during first 30 min of uptime is warning, then ok
+
+        AppUptime=int(ts-ts_boot)
+        sendstring=sendstring+"UPV:"+str(AppUptime)+"\nUPS:" # uptime value in seconds
+        if AppUptime>1800: # status during first 30 min of uptime is warning, then ok
             sendstring=sendstring+"0\n" # ok
         else:
             sendstring=sendstring+"1\n" # warning
+        
+        
+        sendstring=sendstring+'UDW:'+str(PhoneUptime)+' '+str(ProxyUptime)+' '+str(USBuptime)+' '+str(AppUptime)+'\nUDS:' # diagnostic uptimes, add status!
+        if USBuptime>1800 and AppUptime>1800:
+            sendstring=sendstring+'0\n' # ok
+        else:
+            sendstring=sendstring+'1\n' # warning about recent restart
+            
+        sendstring=sendstring+'SLW:'+str(GSMlevel)+' '+str(WLANlevel)+'\nSLS:' # status to be added!
+        if GSMlevel == -115:  # flight mode, asu -1 . or 99? 0\n' # 0..31
+            sendstring=sendstring+'1\n'
+            msg='flight mode active'
+            print(msg)
+            log2file(msg)
+            if OSTYPE == 'android':
+                droid.ttsSpeak(msg)
+        else:        
+            if GSMlevel >0:  # flight mode, asu -1 . or 99? 0\n' # 0..31
+                sendstring=sendstring+'2\n'
+                msg='invalid GSM signal level of '+str(GSMlevel) # 83 becomes from asu 99
+                print(msg)
+                log2file(msg)
+                if OSTYPE == 'android':
+                    droid.ttsSpeak(msg)    
+            else: # ok
+                sendstring=sendstring+'0\n'
     
     #send it all away, some go via buff2server, some directly from here below
+    
     
     if sendstring<>'': # there is something to send, use udpsend()
             udpsend(0,int(ts)) # SEND AWAY. no need for server ack so using 0 instead of inumm
@@ -2827,7 +2883,7 @@ log2file(msg)
 sys.stdout.flush()
 if OSTYPE == 'android':
     droid.ttsSpeak(msg)
-time.sleep(2) 
+    time.sleep(10) 
             
 #main end. main frequency is defined by udp socket timeout!
 ######## END  ######################
