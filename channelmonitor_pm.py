@@ -16,6 +16,7 @@ APVER='channelmonitor_pm.py 20.07.2013'  # using pymodbus! esialgu jamab, ei kor
 # 20.07.2013 fixed missing di renotifications (failed filtering attempt). added some voice messages (on reboot and channel problems). release candidate.
    #  main loop speak is ok, but errors and ending mesages later do not function for some reason!
    #    20.07.2013 broadcast based on wlan ip, works also with hotspot (but that goes off with reboot). ssid dp, passwd hvvpumpla
+# 22.07.2013 toggle wlan (but not hotspot). subprocess has problems on android!!! use droid.toggle() instead
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -57,10 +58,27 @@ def read_long(mba, reg, len): # read multiple registrer to form one resulting va
         
                 
                 
-def subexec(exec_cmd,submode): # returns output of a subprocess, like a shell script or command
+def subexec(exec_cmd,submode): # submode 0 returns exit code, submode 1 returns output of a subprocess, like a shell script or command
+    # seems to work on linux, but NOT on android with python 2.6!!!
+    #for wifi, try this:
+    #droid.toggleWifiState(True) # On 
+    #print droid.checkWifiState().result 
+    #droid.toggleWifiState(False) # Off 
     #proc=subprocess.Popen([exec_cmd], shell=True, stdout=DEVNULL, stderr=DEVNULL)
     if submode == 0: # return exit status, 0 or more
-        proc=subprocess.Popen([exec_cmd], shell=True, stdout=DEVNULL, stderr=DEVNULL)
+        #proc=subprocess.Popen([exec_cmd], shell=True, stdout=DEVNULL, stderr=DEVNULL)
+        proc=subprocess.Popen(exec_cmd, shell=True, stdout=DEVNULL, stderr=DEVNULL)
+        proc.wait()
+        return proc.returncode  # return just the subprocess exit code
+    else: # return everything from sdout
+        proc=subprocess.Popen([exec_cmd], shell=True, stdout=subprocess.PIPE)
+        result = proc.communicate()[0]
+        #proc.wait()
+        return result
+    #proc=subprocess.Popen([exec_cmd], shell=True, stdout=DEVNULL, stderr=DEVNULL)
+    if submode == 0: # return exit status, 0 or more
+        #proc=subprocess.Popen([exec_cmd], shell=True, stdout=DEVNULL, stderr=DEVNULL)
+        proc=subprocess.Popen(exec_cmd, shell=True, stdout=DEVNULL, stderr=DEVNULL)
         proc.wait()
         return proc.returncode  # return just the subprocess exit code
     else: # return everything from sdout
@@ -177,19 +195,25 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         msg='proxyversion '+ProxyVersion+', uuid '+UUID
         log2file(msg) # debug
         
-        mac = read_hexstring(255,310,3).upper() # mas as 12 character hex string
+        mac = read_hexstring(255,310,3).upper() # mas as 12 character hex string, initial try
         msg='read_proxy: mac='+mac
         log2file(msg) # debug
         if OSTYPE == 'android':
             while mac[0:3] <> 'D05': # invalid mac for sony xperia after reboot when wlan was off before reboot
-                msg=' - invalid mac! switching wireless on and off'
+                msg='invalid mac! switching wireless on and off'
                 print(msg)
                 log2file(msg)
                 droid.ttsSpeak(msg)
+                droid.toggleWifiState(True)
+                time.sleep(10) 
+                if droid.checkWifiState().result == True:
+                    droid.ttsSpeak('wireless activated')
+                    mac = read_hexstring(255,310,3).upper() # mas as 12 character hex string
+                    droid.toggleWifiState(False)
+                else:
+                    droid.ttsSpeak('wireless did not activate for some reason')
                 time.sleep(8)
-                subprocess.Popen(['su', '-c', 'ip link set dev wlan0 up'], shell=True, stdout=DEVNULL, stderr=DEVNULL)  # temporarely on
-                time.sleep(8)
-                subprocess.Popen(['su', '-c', 'ip link set dev wlan0 down'], shell=True, stdout=DEVNULL, stderr=DEVNULL) # off again
+                
             msg='got the correct mac '+mac
             print(msg)
             log2file(msg)
@@ -239,23 +263,15 @@ def read_hexstring(mba,regaddr,regcount): # read from modbus register as hex str
 
         
 def channelconfig(): # channel setup register setting based on devicetype and channel registers configuration. try to check channel conflicts
-    # asuuming thge proxy connection is ok, tested before (ProxyState == 0)
+    # assuming the proxy connection is ok, tested before (ProxyState == 0)
     global tcperr,inumm,ts,sendstring #,MBsta # not yet used, add handling
     mba=0
     register=''
     value=0
     regok=0
     mba_array=[]
-        
-    #try: # proxy watchdog to 120 s, to enable reboot in case of tcp comm loss. takes a rooted phone!
-    #    client.write_register(address=110, value=120, unit=255) # reboot timer
-    #    msg='reboot-if-comm-loss-timer set to 120s'
-    #except:
-    #    msg='writing 255 110 120 to start reboot-if-comm-loss-timer failed'
-    #print(msg)
-    #log2file(msg)
-    # default timeout in proxy 120s, rebooting in vcvase of no tcp connections to proxy
-        
+    
+          
     Cmd4="select register,value from setup" 
     cursor4.execute(Cmd4) # read setup variables into cursor
     conn4.commit()
@@ -1657,8 +1673,13 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
         msg='udp send failure in udpsend(), lasting s '+str(int(ts - ts_udpsent))
         log2file(msg)
         print(msg)
-        #traceback.print_exc() # no success for sending
-        
+        # make sure flight mode is NOT on
+        if OSTYPE == 'android':
+            if droid.checkAirplaneMode().result == True:
+                droid.toggleAirplaneMode(False)
+                droid.ttsSpeak('switched flight mode off')
+                time.sleep(10)
+      
         
         
 
@@ -2466,7 +2487,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         unsent()  # delete from buff2server the services that are unsent for too long (3*renotifydelay)
         
         #something to do? chk udp communication first
-        if ts - ts_udpsent > 120: # no udp comm possible for some reason, try to reboot the phone
+        if ts - ts_udpsent > 300: # no udp comm possible for some reason, try to reboot the phone
             TODO='FULLREBOOT' # send 255 666 dead 
             msg='trying full reboot to restore outgoing monitoring messaging'
             log2file(msg) # log message to file  
@@ -2505,12 +2526,64 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                     time.sleep(10)
                 time.sleep(1)
                 
+            if TODO == 'WLANON': 
+                todocode=0
+                msg='wireless on due to command'
+                print(msg)   
+                log2file(msg) # log message to file  
+                if OSTYPE == 'android':
+                    try:
+                        #print 'wifi state',droid.checkWifiState().result
+                        droid.toggleWifiState(True)
+                        todocode=0
+                        droid.ttsSpeak(msg)
+                        time.sleep(10)
+                    
+                    except:
+                        todocode=1
+                
+            if TODO == 'WLANOFF': 
+                todocode=0
+                msg='wireless off due to command'
+                print(msg)   
+                log2file(msg) # log message to file  
+                if OSTYPE == 'android':
+                    try:
+                        #print 'wifi state',droid.checkWifiState().result
+                        droid.toggleWifiState(False)
+                        todocode=0
+                        droid.ttsSpeak(msg)
+                        time.sleep(10)
+                    
+                    except:
+                        todocode=1
+                
+            if TODO == 'WLAN?': 
+                todocode=0
+                msg='checking wireless state due to command'
+                print(msg)   
+                log2file(msg) # log message to file  
+                if OSTYPE == 'android':
+                    try:
+                        dnsize=droid.checkWifiState().result
+                        print 'wlan state',dnsize
+                        todocode=0
+                        
+                    except:
+                        todocode=1
+
+                        
             if TODO == 'FULLREBOOT': # full reboot, NOT just the application. android as well!
                 #stop=1 # cmd:FULLREBOOT
                 try:
-                    msg='started full reboot at '+str(int(ts))
-                    client.write_register(address=666, value=57005, unit=255) # full reboot, value in hex DEAD
-                    todocode=0
+                    msg='started full reboot due to command'
+                    log2file(msg)
+                    print(msg)
+                    if OSTYPE == 'android':
+                        droid.ttsSpeak(msg)
+                        time.sleep(10)
+                        client.write_register(address=666, value=57005, unit=255) # full reboot, value in hex DEAD
+                        todocode=0
                 except:
                     todocode=1
                     msg='full reboot failed at '+str(int(ts))
@@ -2644,6 +2717,8 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 msg='remote command '+TODO+' successfully executed'
                 if TODO.split(',')[0] == 'size':
                     msg=msg+', size '+str(dnsize)
+                if TODO == 'WLAN?':
+                    msg=msg+', state '+str(dnsize) # dnsize used as True or False variable
                 sendstring=sendstring+'ERS:0\n'
                 TODO='' # no more execution
             else: # no success
@@ -2709,7 +2784,11 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     if ts>ts_interval1+interval1delay: # not to try too often, deal with other things too
         ts_interval1=ts
         #print 'MBoldsta, MBsta',MBoldsta,MBsta,'at',ts # report once in 5 seconds or so
-        ProxyState=read_proxy('') # recheck the basic parameters accessible via modbusproxy
+        if mac[0:3] == 'D05':
+            ProxyState=read_proxy('') # recheck the basic parameters accessible via modbusproxy
+        else:
+            ProxyState=read_proxy('all') # try to get the correct wlan mac mac
+            
         if ProxyState == 0:
             tcperr=0
             read_batt() # check the battery values and write them into sqlite tables aichannels, dichannels
@@ -2807,7 +2886,6 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         ts_lastnotify=ts # remember timestamp
         
         make_dichannel_svc() # test to fix renotify
-        
         
         sendstring=sendstring+array2regvalue(MBsta,'EXW',2) # EXW, EXS reporting periodical based on MBsta[] for up to 4 modbus addresses
         sendstring=sendstring+array2regvalue(TCW,'TCW',0) # traffic TCW[] reporting periodical, no status above 0
