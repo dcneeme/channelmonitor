@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 25.07.2013'  # using pymodbus! esialgu jamab, ei korda di!
+APVER='channelmonitor_pm.py 26.07.2013'  # using pymodbus! esialgu jamab, ei korda di!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -19,6 +19,7 @@ APVER='channelmonitor_pm.py 25.07.2013'  # using pymodbus! esialgu jamab, ei kor
 # 22.07.2013 toggle wlan (but not hotspot). subprocess has problems on android!!! use droid.toggle() instead
 # 23.07.2013 airplane mode off 
 # 25.07.2013 fixing gsm signal level to -120 if <-114
+# 26.07.2013 eelmise fix.. -120 gBm
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -186,8 +187,14 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         ProxyUptime=int(read_long(255,201,4)/1000)
         GSMlevel=client.read_holding_registers(address=304, count=1, unit=255).registers[0]*2-113 # 0..31, 99? converted to dBm read one at the time! -115=flight_mode!
         WLANlevel=client.read_holding_registers(address=305, count=1, unit=255).registers[0]-65536  # converted to negative number. read one at the time! 
-        msg='phoneuptime '+str(PhoneUptime)+', proxyuptime '+str(ProxyUptime)+', gsmlevel '+str(GSMlevel)+', wlanlevel '+str(WLANlevel) # levels dBm
-        log2file(msg) # debug
+        if WLANlevel > 0 or WLANlevel < -114:  # -115 means flight mode. can be also -200 or -9999. 
+            WLANlevel=-120 # means off to me.
+            #msg='fixing WLANlevel to '+str(WLANlevel)
+            #print(msg)
+            #log2file(msg)
+        msg='phoneup '+str(PhoneUptime)+', proxyup '+str(ProxyUptime)+', gsm '+str(GSMlevel)+', wlan '+str(WLANlevel) # levels dBm
+        #log2file(msg) # debug
+        print(msg)
         
         if what <> 'all':  # enough what we've read above for regular reading #########################
             return 0
@@ -2847,9 +2854,18 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         # this is the appmain part below
         msg='appmain start at'+str(int(ts))+', time to renotify prg var '+str(int(ts-ts_lastnotify))+', syslog to '+loghost
         print(msg)
-        log2file(msg) # debug
+        #log2file(msg) # debug
         ts_lastappmain=ts # remember the execution time
-  
+        
+        # signal levels to send. measured once in 5s
+        #if GSMlevel == -115:  # flight mode, asu -1 . or 99? 0\n' # 0..31
+        #sendstring=sendstring+'1\n'
+        msg='GSMlevel, WLANlevel are '+str(GSMlevel)+', '+str(WLANlevel)
+        print(msg)
+        log2file(msg)
+        sendstring=sendstring+'SLW:'+str(GSMlevel)+' '+str(WLANlevel)+'\nSLS:0\n' # status to be added!
+        
+        
         make_aichannels_svc() # put ai data into buff2server table to be sent to the server - only if successful reading!
         
         mbcommresult=read_counters() # read counters (2 registers usually, 32 bit) and put data into buff2server table to be sent to the server - only if successful reading!
@@ -2911,19 +2927,14 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         else:
             sendstring=sendstring+'1\n' # warning about recent restart
             
-        sendstring=sendstring+'SLW:'+str(GSMlevel)+' '+str(WLANlevel)+'\nSLS:' # status to be added!
-        #if GSMlevel == -115:  # flight mode, asu -1 . or 99? 0\n' # 0..31
-        sendstring=sendstring+'1\n'
         
-        if GSMlevel >0 or GSMlevel < -114:  # -115 means flight mode. can be also -200 or -9999. 
-            GSMlevel=-120 # means off to me.
-            print 'fixing GSMlevel to ',GSMlevel
+        
     
     #send it all away, some go via buff2server, some directly from here below
     
     
     if sendstring<>'': # there is something to send, use udpsend()
-            udpsend(0,int(ts)) # SEND AWAY. no need for server ack so using 0 instead of inumm
+        udpsend(0,int(ts)) # SEND AWAY. no need for server ack so using 0 instead of inumm
 
     # REGULAR MESSAGING RELATED PART END (AI, COUNTERS)   
 
