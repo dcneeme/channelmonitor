@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 20.07.2013'  # using pymodbus! esialgu jamab, ei korda di!
+APVER='channelmonitor_pm.py 25.07.2013'  # using pymodbus! esialgu jamab, ei korda di!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -17,11 +17,14 @@ APVER='channelmonitor_pm.py 20.07.2013'  # using pymodbus! esialgu jamab, ei kor
    #  main loop speak is ok, but errors and ending mesages later do not function for some reason!
    #    20.07.2013 broadcast based on wlan ip, works also with hotspot (but that goes off with reboot). ssid dp, passwd hvvpumpla
 # 22.07.2013 toggle wlan (but not hotspot). subprocess has problems on android!!! use droid.toggle() instead
+# 23.07.2013 airplane mode off 
+# 25.07.2013 fixing gsm signal level to -120 if <-114
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
 # send gsm signal level to monitoring! not available...
 # add sqlite tables test, start dbREcreate together with channelmonitor stopping if it feels necessary to restore normal operation! 
+# udp connectivity is restored via reboot. try socket reopen...
 
 #modbusproxy registers / Only one register can be read  or write at time (registers are sometimes long)
 #000-099 ModbusProxy information
@@ -1679,10 +1682,8 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
                 droid.toggleAirplaneMode(False)
                 droid.ttsSpeak('switched flight mode off')
                 time.sleep(10)
-      
         
         
-
 def push(filename): # send (gzipped) file to supporthost
     global SUPPORTHOST, mac
     destinationdirectory = 'support/pyapp/'+mac
@@ -2911,23 +2912,12 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             sendstring=sendstring+'1\n' # warning about recent restart
             
         sendstring=sendstring+'SLW:'+str(GSMlevel)+' '+str(WLANlevel)+'\nSLS:' # status to be added!
-        if GSMlevel == -115:  # flight mode, asu -1 . or 99? 0\n' # 0..31
-            sendstring=sendstring+'1\n'
-            msg='flight mode active'
-            print(msg)
-            log2file(msg)
-            if OSTYPE == 'android':
-                droid.ttsSpeak(msg)
-        else:        
-            if GSMlevel >0:  # flight mode, asu -1 . or 99? 0\n' # 0..31
-                sendstring=sendstring+'2\n'
-                msg='invalid GSM signal level of '+str(GSMlevel) # 83 becomes from asu 99
-                print(msg)
-                log2file(msg)
-                if OSTYPE == 'android':
-                    droid.ttsSpeak(msg)    
-            else: # ok
-                sendstring=sendstring+'0\n'
+        #if GSMlevel == -115:  # flight mode, asu -1 . or 99? 0\n' # 0..31
+        sendstring=sendstring+'1\n'
+        
+        if GSMlevel >0 or GSMlevel < -114:  # -115 means flight mode. can be also -200 or -9999. 
+            GSMlevel=-120 # means off to me.
+            print 'fixing GSMlevel to ',GSMlevel
     
     #send it all away, some go via buff2server, some directly from here below
     
