@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 26.07.2013'  # using pymodbus! esialgu jamab, ei korda di!
+APVER='channelmonitor_pm.py 18.08.2013'  # using pymodbus! esialgu jamab, ei korda di!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -20,6 +20,7 @@ APVER='channelmonitor_pm.py 26.07.2013'  # using pymodbus! esialgu jamab, ei kor
 # 23.07.2013 airplane mode off 
 # 25.07.2013 fixing gsm signal level to -120 if <-114
 # 26.07.2013 eelmise fix.. -120 gBm
+# 18.08.2013 counters fix, only last svc was sent to buff2server
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -1085,8 +1086,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
         Cmd3="select val_reg,count(member) from counters group by val_reg"
         #print "Cmd3=",Cmd3
         cursor3.execute(Cmd3) # getting services to be read and reported
-        
-        for row in cursor3: # multivalue service members
+        for row in cursor3: # possibly multivalue service members
             lisa='' # string to put space-separated values in
             val_reg=''  
             sta_reg=''
@@ -1163,14 +1163,14 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                 wcount=srow[19] # word count - to be used as read_register() param 3
             
                 if mba>=0 and mba<256 and regadd>=0 and regadd<65536:  # legal values for mba and regaddr
-                    #print 'reading counter value from mba',mba,'regadd',regadd,'for val_reg',val_reg,'member',member,'wcount',wcount,  # debug
+                    print 'reading counter value from mba',mba,'regadd',regadd,'for val_reg',val_reg,'member',member,'wcount',wcount,  # debug
                     
                     #MBsta[mba-1]=respcode
                     try: # if respcode == 0: # got tcpdata as counter value
                         result = client.read_holding_registers(address=regadd, count=2, unit=mba) # respcode=read_register(mba,regadd,wcount). 32 bits!
                         if wcount == 2:
                             tcpdata = 65536*result.registers[0]+result.registers[1]
-                            print 'normal counter result',tcpdata,'based on',str(result.registers[0]),str(result.registers[1]) # debug
+                            print 'normal counter',str(mba),str(regadd),'result',tcpdata,'based on',str(result.registers[0]),str(result.registers[1]) # debug
                         else: # barionet, assumably -2
                             tcpdata = 65536*result.registers[1]+result.registers[0]  # wrong word order for counters in barionet!
                             print 'barionet counter result',tcpdata,'based on',str(result.registers[1]),str(result.registers[0]) # debug
@@ -1247,7 +1247,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                             if value>outlo+0.05*(outhi-outlo):
                                 status=0 # normal again
                                 
-                        #print 'status for counter svc',val_reg,status,'due to cfg',cfg,'and value',value,'while limits are',outlo,outhi # debug
+                        print 'status for counter svc',val_reg,status,'due to cfg',cfg,'and value',value,'while limits are',outlo,outhi # debug
                         
                         #if value<ovalue and ovalue < 4294967040: # this will restore the count increase during comm break
                         if value == 0 and ovalue >0: # possible pic reset. perhaps value <= 100? 
@@ -1273,7 +1273,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                                     
                         #counters table update
                         Cmd3="UPDATE counters set status='"+str(status)+"', value='"+str(value)+"', raw='"+str(raw)+"', ts='"+str(int(ts))+"' where val_reg='"+val_reg+"' and member='"+str(member)+"'" 
-                        #print Cmd3 # temporary
+                        #print 'Cmd3',Cmd3 # temporary debug
                         conn3.execute(Cmd3) # update counters
                                                 
                         lisa=lisa+str(value) # members together into one string
@@ -1290,12 +1290,12 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                     log2file(msg)
                     print(msg)                    
                     
-        # sending in to buffer 
-        #print mac,host,udpport,svc_name,sta_reg,status,val_reg,lisa,ts_created,inumm # temporary
-        Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','"+sta_reg+"','"+str(status)+"','"+val_reg+"','"+str(lisa)+"','"+str(int(ts_created))+"','','')" 
-        # inum and ts_tried empty a t first!
-        #print "cnt Cmd1=",Cmd1 # debug
-        conn1.execute(Cmd1)
+            # sending in to buffer 
+            #print mac,host,udpport,svc_name,sta_reg,status,val_reg,lisa,ts_created,inumm # temporary
+            Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','"+sta_reg+"','"+str(status)+"','"+val_reg+"','"+str(lisa)+"','"+str(int(ts_created))+"','','')" 
+            # inum and ts_tried empty at first!
+            #print "cnt Cmd1=",Cmd1 # debug
+            conn1.execute(Cmd1)
             
                 
                 
