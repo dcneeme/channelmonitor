@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 09.09.2013'  # using pymodbus! esialgu jamab, ei korda di!
+APVER='channelmonitor_pm.py 09.09.2013'  # using pymodbus! esialgu jamab, ei korda di! NO logging!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -22,7 +22,7 @@ APVER='channelmonitor_pm.py 09.09.2013'  # using pymodbus! esialgu jamab, ei kor
 # 26.07.2013 eelmise fix.. -120 gBm
 # 18.08.2013 counters fix, only last svc was sent to buff2server
 # 30.08.2013 finished di and ai age check, svc not to be reported if stale
-# 09.09.2013 fixed a few minor problems in dichannel_bits(). restored also PVW and T1W reporting, lost for a while for unknown reason.
+# 09.09.2013 fixed a few minor problems in dichannel_bits(). restored also PVW and T1W reporting, lost for a while for unknown reason. NO logging from now on!!!
 
 
 # PROBLEMS and TODO
@@ -1559,6 +1559,8 @@ def log2file(msg): # appending a line to the log file
         #print 'could NOT send syslog message to '+repr(logaddr)
         #traceback.print_exc()
         
+    return 0 # lopetame logimise! ############################ 09.09.2013
+    
     try: # file write
         with open(LOG,"a") as f:
             f.write(msg) # writing LOG
