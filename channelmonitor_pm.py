@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 18.08.2013'  # using pymodbus! esialgu jamab, ei korda di!
+APVER='channelmonitor_pm.py 09.09.2013'  # using pymodbus! esialgu jamab, ei korda di!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -21,12 +21,17 @@ APVER='channelmonitor_pm.py 18.08.2013'  # using pymodbus! esialgu jamab, ei kor
 # 25.07.2013 fixing gsm signal level to -120 if <-114
 # 26.07.2013 eelmise fix.. -120 gBm
 # 18.08.2013 counters fix, only last svc was sent to buff2server
+# 30.08.2013 finished di and ai age check, svc not to be reported if stale
+# 09.09.2013 fixed a few minor problems in dichannel_bits(). restored also PVW and T1W reporting, lost for a while for unknown reason.
+
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
 # send gsm signal level to monitoring! not available...
 # add sqlite tables test, start dbREcreate together with channelmonitor stopping if it feels necessary to restore normal operation! 
 # udp connectivity is restored via reboot. try socket reopen...
+# 30.08.2013 - each ai svc should have max time and max chg to launch rereporting. to do with classes... and make xychannels and xyvalues sql separate!
+
 
 #modbusproxy registers / Only one register can be read  or write at time (registers are sometimes long)
 #000-099 ModbusProxy information
@@ -582,21 +587,26 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
 
             
                 if mba>=0 and mba<256 and regadd>=0 and regadd<65536:  # valid mba and regaddr, let's read to update value in aichannels table
-                    print 'reading ai',mba,regadd,'for',val_reg,'m',member,  # ajutine
-                    
+                    print 'reading ai',mba,regadd,'for',val_reg,'m',member, # 'temp skip!'  # ajutine
+                    #return 1
                     #respcode=read_register(mba,regadd,1)  #  READING THE AI REGISTER
                     
                     #if respcode == 0: # got  tcpdata as register content. convert to scale.
                     try:
                         result = client.read_holding_registers(address=regadd, count=1, unit=mba)
-                        tcpdata = result.registers[0]
+                        tcpdata = result.registers[0] # reading modbus slave
                         #print 'value',tcpdata
-                        MBerr[mba]=0
+                        if mba<5:
+                            MBerr[mba]=0
                             
-                        if x1<>x2 and y1<>y2: # sisendandmed usutavad
-                            value=(tcpdata-x1)*(y2-y1)/(x2-x1)
+                        if x1<>x2 and y1<>y2: # konf normaalne
+                            value=(tcpdata-x1)*(y2-y1)/(x2-x1) # lineaarteisendus
                             value=y1+value 
                             
+                            if value == y2: # ebanormaalne analoogsignaali kyllastus
+                                print 'skipping invalid value, equal to y2',y1
+                                return 1
+                                
                             #print 'raw',tcpdata,', ovalue',ovalue, # debug
                             if avg>1 and abs(value-ovalue)<value/2: # keskmistame, hype ei ole suur
                             #if avg>1:  # lugemite keskmistamine vajalik, kusjures vaartuse voib ju ka komaga sailitada!
@@ -606,7 +616,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                                 if tcpdata == 4096: # this is error result from 12 bit 1wire temperature sensor
                                     value=ovalue # repeat the previous value. should count the errors to raise alarm in the end! counted error result is block, value 3 stps sending. 
                                 else: # acceptable non-averaged value
-                                    print ', no averaging, value',value
+                                    print ', no avg, value',value
                                 
                         else:
                             print "val_reg",val_reg,"member",member,"ai2scale PARAMETERS INVALID:",x1,x2,'->',y1,y2,'value not used!'
@@ -614,10 +624,10 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                             status=3 # not to be sent status=3! or send member as NaN? 
                     
                     except: # else: # failed reading register, respcode>0
-                        MBerr[mba]=MBerr[mba]+1 # increase error counter
-                        print 'failed to read ai register', mba,regadd,'respcode',respcode
-                        if respcode >0:
-                            return 1
+                        if mba<5:
+                            MBerr[mba]=MBerr[mba]+1 # increase error counter
+                        print 'failed to read ai mb register', mba,regadd,'skipping aichannels table update'
+                        return 1 # skipping aichannels update below
                 
                 else:
                     value=ovalue # possible setpoint, ovalue from aichannels table, no modbus reading for this
@@ -664,7 +674,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
         return 0
     
     except:
-        msg='PROBLEM with aichannels reading or processing at'+str(int(ts))
+        msg='PROBLEM with aichannels reading or processing at '+str(int(ts))
         print(msg)
         log2file(msg)
         traceback.print_exc()
@@ -676,7 +686,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
 
     
 
-def make_aichannels_svc(): # send the ai service messages to the monitoring server (only if fresh enough, not older than 2xappdelay)
+def make_aichannels(): # send the ai service messages to the monitoring server (only if fresh enough, not older than 2xappdelay)
     locstring="" # local
     global inumm,ts,ts_inumm,mac,tcpdata, tcperr, udpport,appdelay
     mba=0 # lokaalne siin
@@ -696,108 +706,17 @@ def make_aichannels_svc(): # send the ai service messages to the monitoring serv
         cursor3.execute(Cmd3)
         
         for row in cursor3: # services
-            lisa='' # vaartuste joru
-            val_reg=''  
-            sta_reg=''
-            status=0 # esialgu
-
             val_reg=row[0] # teenuse nimi
             mcount=int(row[1])
             sta_reg=val_reg[:-1]+"S" # nimi ilma viimase symbolita ja S - statuse teenuse nimi, analoogsuuruste ja temp kohta
-            svc_name='' # mottetu komment puhvri reale?
-            #print 'reading aichannels values for val_reg',val_reg,'with',mcount,'members' # ajutine
-            #mba,regadd,val_reg,member,cfg,x1,x2,y1,y2,outlo,outhi,avg,block,raw,value,status,ts,desc,comment  # aichannels
-            Cmd3="select * from aichannels where val_reg='"+val_reg+"'" # loeme yhe teenuse kogu info uuesti
-            #print Cmd3 # ajutine
-            cursor3a.execute(Cmd3) # another cursor to read the same table
-
-            for srow in cursor3a: # service members
-                #print repr(srow) # debug
-                mba=-1 # 
-                regadd=-1
-                member=0
-                cfg=0
-                x1=0
-                x2=0
-                y1=0
-                y2=0
-                outlo=0
-                outhi=0
-                ostatus=0 # eelmine
-                #tvalue=0 # test, vordlus
-                oraw=0
-                ovalue=0 # previous (possibly averaged) value
-                ots=0 # eelmine ts value ja status ja raw oma
-                avg=0 # keskmistamistegur, mojub alates 2
-                desc=''
-                comment=''
-                # 0       1     2     3     4   5  6  7  8  9    10     11  12    13  14   15     16  17    18
-                #mba,regadd,val_reg,member,cfg,x1,x2,y1,y2,outlo,outhi,avg,block,raw,value,status,ts,desc,comment  # aichannels
-                if srow[0]<>'':
-                    mba=int(srow[0]) # must be int! will be -1 if empty (setpoints)
-                if srow[1]<>'':
-                    regadd=int(srow[1]) # must be int! will be -1 if empty
-                val_reg=srow[2] # see on string
-                if srow[3]<>'':
-                    member=int(srow[3])
-                if srow[4]<>'':
-                    cfg=int(srow[4]) # konfibait nii ind kui grp korraga, esita hex kujul hiljem
-                if srow[5]<>'':
-                    x1=int(srow[5])
-                if srow[6]<>'':
-                    x2=int(srow[6])
-                if srow[7]<>'':
-                    y1=int(srow[7])
-                if srow[8]<>'':
-                    y2=int(srow[8])
-                if srow[9]<>'':
-                    outlo=int(srow[9])
-                if srow[10]<>'':
-                    outhi=int(srow[10])
-                if srow[11]<>'':
-                    avg=int(srow[11])  #  averaging strength, values 0 and 1 do not average!
-                if srow[12]<>'': # block - loendame siin vigu, kui kasvab yle 3? siis enam ei saada
-                    block=int(srow[12])  #  
-                if srow[13]<>'': # 
-                    oraw=int(srow[13])
-                if srow[14]<>'': 
-                    ovalue=int(srow[14])
-                if srow[15]<>'':
-                    ostatus=int(srow[15])
-                if srow[16]<>'':
-                    ots=int(srow[16])
-                desc=srow[17]
-                comment=srow[18]
-                
             
-                if mba>=0 and mba<256 and regadd>=0 and regadd<65536:  # valid mba and regaddr, let's read to update value in aichannels table
-                    print 'reporting ai mba',mba,'.',regadd,'for ',val_reg,'m',member  # ajutine
-                else:
-                    value=ovalue # possible setpoint, ovalue from aichannels table, no modbus reading for this
-                    status=0
-                    #print 'setpoint value',value
-            
-                
-                if ostatus>status:
-                    status=ostatus
-                if status>3:
-                    msg='make_aichannels_svs() invalid status '+str(status)
-                    print(msg)
-                    log2file(msg)
-                    
-                if lisa<>'': # not the first member
-                    lisa=lisa+' ' # separator between member values
-                lisa=lisa+str(ovalue) # adding member values into one string
-            
-            # put together final service to buff2server
-            Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','"+sta_reg+"','"+str(status)+"','"+val_reg+"','"+str(lisa)+"','"+str(int(ts_created))+"','','')" 
-            #print "ai Cmd1=",Cmd1 # debug
-            if (ts-ots  < 2*appdelay): # has been updated lately
-                conn1.execute(Cmd1) # write aichannels data into buff2server
+            if make_aichannel_svc(val_reg,sta_reg) == 0: # successful svc insertion into buff2server
+                pass
+                print 'tried to report svc',val_reg,sta_reg
             else:
-                msg='skipping ai data send (buff2server wr) due to stale aichannels data' # debug
-                log2file(msg) # incl syslog
-                print(msg)
+                print 'FAILED to report svc',val_reg,sta_reg
+                return 1 #cancel
+                
                 
         conn1.commit() # buff2server transaction end
         conn3.commit() # aichannels transaction end
@@ -809,41 +728,151 @@ def make_aichannels_svc(): # send the ai service messages to the monitoring serv
         traceback.print_exc()
         sys.stdout.flush()
         time.sleep(0.5)
+        return 1
         
+
+
         
+def make_aichannel_svc(val_reg,sta_reg):  # make a single service record based on aichannel members and put it into buff2server
+    global inumm,ts,ts_inumm,mac,tcpdata, tcperr, udpport,appdelay
+    svc_name='' # mottetu komment puhvri reale?
+    status=0 # esialgu
+    lisa=''
+    #print 'reading aichannels values for val_reg',val_reg,'with',mcount,'members' # ajutine
+    
+    Cmd3="select * from aichannels where val_reg='"+val_reg+"'" # loeme yhe teenuse kogu info uuesti
+    #print Cmd3 # ajutine
+    cursor3a.execute(Cmd3) # another cursor to read the same table
+
+    for srow in cursor3a: # service members
+        #print repr(srow) # debug
+        mba=-1 # 
+        regadd=-1
+        member=0
+        cfg=0
+        x1=0
+        x2=0
+        y1=0
+        y2=0
+        outlo=0
+        outhi=0
+        ostatus=0 # eelmine
+        #tvalue=0 # test, vordlus
+        oraw=0
+        ovalue=0 # previous (possibly averaged) value
+        ots=0 # eelmine ts value ja status ja raw oma
+        mts=0 # max ts, if too old, skip the service reporting
+        avg=0 # keskmistamistegur, mojub alates 2
+        desc=''
+        comment=''
+        # 0       1     2     3     4   5  6  7  8  9    10     11  12    13  14   15     16  17    18
+        #mba,regadd,val_reg,member,cfg,x1,x2,y1,y2,outlo,outhi,avg,block,raw,value,status,ts,desc,comment  # aichannels
+        if srow[0]<>'':
+            mba=int(srow[0]) # must be int! will be -1 if empty (setpoints)
+        if srow[1]<>'':
+            regadd=int(srow[1]) # must be int! will be -1 if empty
+        val_reg=srow[2] # see on string
+        if srow[3]<>'':
+            member=int(srow[3])
+        if srow[4]<>'':
+            cfg=int(srow[4]) # konfibait nii ind kui grp korraga, esita hex kujul hiljem
+        if srow[5]<>'':
+            x1=int(srow[5])
+        if srow[6]<>'':
+            x2=int(srow[6])
+        if srow[7]<>'':
+            y1=int(srow[7])
+        if srow[8]<>'':
+            y2=int(srow[8])
+        if srow[9]<>'':
+            outlo=int(srow[9])
+        if srow[10]<>'':
+            outhi=int(srow[10])
+        if srow[11]<>'':
+            avg=int(srow[11])  #  averaging strength, values 0 and 1 do not average!
+        if srow[12]<>'': # block - loendame siin vigu, kui kasvab yle 3? siis enam ei saada
+            block=int(srow[12])  #  
+        if srow[13]<>'': # 
+            oraw=int(srow[13])
+        if srow[14]<>'': 
+            ovalue=int(srow[14])
+        if srow[15]<>'':
+            ostatus=int(srow[15])
+        if srow[16]<>'':
+            ots=int(srow[16])
+        desc=srow[17]
+        comment=srow[18]
+        
+        if mts < ots:
+            mts=ots # latest update to the service must be not too old!
+    
+        if mba>=0 and mba<256 and regadd>=0 and regadd<65536:  # valid mba and regaddr, let's read to update value in aichannels table
+            print 'reporting ai service',val_reg,'member',member,'with value',ovalue  # ajutine
+            
+        else:
+            value=ovalue # possible setpoint, ovalue from aichannels table, no modbus reading for this
+            status=0
+            #print 'setpoint value',value
+    
+        
+        if ostatus>status:
+            status=ostatus
+        if status>3:
+            msg='make_aichannels_svs() invalid status '+str(status)
+            print(msg)
+            log2file(msg)
+            
+        if lisa<>'': # not the first member
+            lisa=lisa+' ' # separator between member values
+        lisa=lisa+str(ovalue) # adding member values into one string
+    
+    # put together final service to buff2server
+    Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','"+sta_reg+"','"+str(status)+"','"+val_reg+"','"+str(lisa)+"','"+str(int(ts_created))+"','','')" 
+    #print "ai Cmd1=",Cmd1 # debug
+    if (ts-mts  < 2*appdelay): # has been updated lately
+        conn1.execute(Cmd1) # write aichannels data into buff2server
+    else:
+        msg='skipping ai data send (buff2server wr) due to stale aichannels data' # debug
+        log2file(msg) # incl syslog
+        print(msg)
+        return 1
+
+    return 0
+
     
 
-def read_dichannel_bits(): # binary inputs, bit changes to be found and values in dichannels table updated
+def read_dichannel_bits(mba): # binary inputs, bit changes to be found and values in dichannels table updated
 # reads 16 bits as di or do channels to be reported to monitoring
 # NB the same bits can be of different rows, to be reported in different services. services and their members must be unique
     locstring="" # see on siin lokaalne!
     global inumm,ts,ts_inumm,mac,tcpdata, MBerr,odiword # what if several di extensions??
-    mba=0 # lokaalne siin
+    #mba=0 # lokaalne siin
     val_reg=''
     desc=''
     comment=''
     mcount=0
-    #Cmd1='' 
-    #Cmd3=''
-    #Cmd4=''
-    ts_created=ts # selle loeme teenuse ajamargiks
+    ts_created=ts # timestamp
     ichg=0 # change mask iga mba kohta eraldi koostatav
     
     try:
         Cmd3="BEGIN IMMEDIATE TRANSACTION" # conn3
         conn3.execute(Cmd3) # 
         
-        Cmd3="select mba,regadd from dichannels group by mba,regadd" # saame registrid mida lugeda vaja, mba ja regadd
+        #Cmd3="select mba,regadd from dichannels group by mba,regadd" # finding di registers to read. usually 1 reg per mb slave.
+        Cmd3="select regadd from dichannels where mba='"+str(mba)+"'"  # for one slave only
         cursor3.execute(Cmd3)
         
-        for row in cursor3: # teenuse seest teenuse liikmete formeerimise info lugemine, tuleb mitu rida
+        for row in cursor3: # for each mba and regadd (DI register)
             regadd=0
-            mba=0
+            #mba=0
 
+            #if row[0]<>'':
+            #    mba=int(row[0]) # must be number
+            #if row[1]<>'':
+            #    regadd=int(row[1]) # must be number
             if row[0]<>'':
-                mba=int(row[0]) # must ne number
-            if row[1]<>'':
-                regadd=int(row[1]) # must be number
+                regadd=int(row[0]) # must be number
+            
             #mcount=int(row[1])
             if val_reg <> val_reg[:-1]+"S": #  only if val_reg does not end with S!
                 sta_reg=val_reg[:-1]+"S" 
@@ -851,17 +880,21 @@ def read_dichannel_bits(): # binary inputs, bit changes to be found and values i
                 sta_reg='' # no status added to the datagram 
                 
             svc_name='' # unused?
-            #print 'reading dichannel register mba,regadd',mba,regadd, # temporary
-            
-            Cmd3="select bit,value from dichannels where mba='"+str(mba)+"' and regadd='"+str(regadd)+"' group by regadd,bit" # loeme koik di kasutusel bitid sellelt registrilt
-            cursor3a.execute(Cmd3)
-            
-            #MBsta[mba-1]=respcode
+            #print 'reading dichannel register mba,regadd',mba,regadd, # temporary debug
             try: # if respcode == 0: # successful DI register reading - continuous to catch changes! ################################
-                result = client.read_holding_registers(address=regadd, count=1, unit=mba) # respcode=read_register(mba,regadd,1) # 1 register at the time
+                result = client.read_holding_registers(address=regadd, count=1, unit=mba) # respcode=read_register(mba,regadd,1) # 1 register at the time, from mb slave
                 tcpdata = result.registers[0]  # saab ka bitivaartusi lugeda! 
-                MBerr[mba]=0
+                if mba<5:
+                    MBerr[mba]=0
+                #print ', result',format("%04x" % tcpdata)
+            except:
+                print 'di register',mba,regadd,'read FAILURE! no sql update'
+                return 1
                 
+            Cmd3="select bit,value from dichannels where mba='"+str(mba)+"' and regadd='"+str(regadd)+"' group by regadd,bit" # loeme koik di kasutusel bitid sellelt registrilt
+            try: # now process the data stored into dichannels table
+                cursor3a.execute(Cmd3)
+            
                 for srow in cursor3a: # for every mba list the bits in used&to be updated 
                     bit=0
                     ovalue=0
@@ -871,8 +904,8 @@ def read_dichannel_bits(): # binary inputs, bit changes to be found and values i
                         bit=int(srow[0]) # bit 0..15
                     if srow[1]<>'':
                         ovalue=int(srow[1]) # bit 0..15
-                    #print 'decoding value from bit',bit
                     value=(tcpdata&2**bit)/2**bit # bit value 0 or 1 instead of 1, 2, 4... / added 06.04
+                    #print 'decoded value for bit',bit,value,'was',ovalue
                     
                     # check if outputs must be written
                     if value <> ovalue: # change detected, update dichannels value, chg-flag  - saaks ka maski alusel!!!
@@ -883,28 +916,33 @@ def read_dichannel_bits(): # binary inputs, bit changes to be found and values i
                         log2file(msg)
                         # dichannels table update with new bit values and change flags. no status change here. no update if not changed!
                         Cmd3="UPDATE dichannels set value='"+str(value)+"', chg='"+str(chg)+"', ts_chg='"+str(int(ts))+"' where mba='"+str(mba)+"' and regadd='"+str(regadd)+"' and bit='"+str(bit)+"'" # uus bit value ja chg lipp, 2 BITTI!
-                        conn3.execute(Cmd3) # write
-                
+                    else: # ts_chg used as ts_read now! change detection does not need that  timestamp!
+                        Cmd3="UPDATE dichannels set ts_chg='"+str(int(ts))+"' where mba='"+str(mba)+"' and regadd='"+str(regadd)+"' and bit='"+str(bit)+"'" # old value unchanged, use ts_CHG AS TS!
+                    #print Cmd3 # debug
+                    conn3.execute(Cmd3) # write
+                    
             except: # else: # respcode>0
-                MBerr[mba]=MBerr[mba]+1 # increase error counter
-                msg='failed to read di register from '+str(mba)+'.'+str(regadd)
-                if MBerr[mba] == 1: # first error
-                    print(msg) # di problem (first only)
-                    log2file(msg) # di problem (first only)
-                #if respcode >0:
-                    #socket_restart() # close and open tcpsocket
-                #    return 2
+                if mba<5:
+                    MBerr[mba]=MBerr[mba]+1 # increase error counter
+                    msg='failed to read di register from '+str(mba)+'.'+str(regadd)
+                    if MBerr[mba] == 1: # first error
+                        print(msg) # di problem (first only)
+                        log2file(msg) # di problem (first only)
                 return 1
                 
+            msg='dichannel register mba.regadd '+str(mba)+'.'+str(regadd)+' read success, value 0x'+format("%04x" % tcpdata)
+            #if mba == 255:
+            #    print(msg) # temporary debug
         conn3.commit()  # dichannel-bits transaction end 
+        
         return 0
 
     except Exception,err:
-        traceback.print_exc()
         log2file('err: '+repr(err))
         msg='there was a problem with dichannels data reading or processing!'
         log2file(msg)
         print(msg)
+        traceback.print_exc()
         time.sleep(1)
         return 1 
     
@@ -913,7 +951,7 @@ def read_dichannel_bits(): # binary inputs, bit changes to be found and values i
 
 
 
-def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only when member(s) changed or for renotification AND updated less than 5 s ago
+def make_dichannels(): # di services into to-be-sent buffer table BUT only when member(s) changed or for renotification AND updated less than 5 s ago
     locstring="" # local
     global inumm,ts,ts_inumm,mac #,tcperr
     mba=0 # local here
@@ -922,7 +960,7 @@ def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only wh
     comment=''
     mcount=0
     ts_created=ts # timestamp
-    sumstatus=0 # summary status for a service, based on service member statuses
+    #sumstatus=0 # summary status for a service, based on service member statuses
     chg=0 # status change flag with 2 bits in use!
     value=0
     ts_last=0 # last ime the service member has been reported to the server
@@ -936,7 +974,7 @@ def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only wh
         cursor3.execute(Cmd3)
         
         for row in cursor3: # services to be processed. either just changed or to be resent
-            lisa='' # string of space-separated values
+            #lisa='' # string of space-separated values
             val_reg=''  
             sta_reg=''
             sumstatus=0 # at first
@@ -952,99 +990,11 @@ def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only wh
             log2file(msg)            
             #mcount=int(row[1]) # changed service member count
             sta_reg=val_reg[:-1]+"S" # service status register name
-            svc_name='' # unused? but must exist for insertion int obuff2server
-            #print 'reading dichannels values for val_reg',val_reg,'with',mcount,'changed members' # debug 
-            Cmd3="select * from dichannels where val_reg='"+val_reg+"' order by member asc" # data for one service ###########
-            cursor3a.execute(Cmd3)
             
-            for srow in cursor3a: # ridu tuleb nii palju kui selle teenuse liikmeid, pole oluline milliste mba ja readd vahele jaotatud
-                #print 'row in cursor3a',srow # temporary debug
-                mba=0 # local here
-                regadd=0
-                bit=0 # 
-                member=0
-                cfg=0
-                ostatus=0 # previous value
-                #tvalue=0 # test
-                oraw=0
-                ovalue=0 # previous or averaged value
-                ots=0 # previous update timestamp
-                avg=0 # averaging strength, has effect starting from 2
-                desc=''
-                comment=''
-                # 0      1   2     3     4      5     6     7     8    9  10     11  
-                #mba,regadd,bit,val_reg,member,cfg,block,value,status,ts,desc,comment # dichannels
-                if srow[0]<>'':
-                    mba=int(srow[0])
-                if srow[1]<>'':
-                    regadd=int(srow[1]) # must be int! can be missing
-                if srow[2]<>'':
-                    bit=int(srow[2])
-                val_reg=srow[3] #  string
-                if srow[4]<>'':
-                    member=int(srow[4])
-                if srow[5]<>'':
-                    cfg=int(srow[5]) # configuration byte 
-                # block?? to p[revent sending service with errors. to be added!
-                if srow[7]<>'': 
-                    value=int(srow[7]) # new value
-                if srow[8]<>'':
-                    ostatus=int(srow[8]) # old status
-                if srow[9]<>'': 
-                    ots=int(srow[9]) # value ts timestamp
-                #if srow[10]<>'':
-                    #ots=int(srow[10]) 
-                desc=srow[11] # description for UI
-                comment=srow[11] # comment internal
-
             
-                #print 'make_channel_svc():',val_reg,'member',member,'value before status proc',value  # temporary debug
-               
-                if lisa<>"": # not the first member any nmore
-                    lisa=lisa+" "
-                    
-                # status and inversions according to configuration byte
-                status=0 # initially for each member
-                if (cfg&4): # value2value inversion
-                    value=(1^value) # possible member values 0 voi 1
-                lisa=lisa+str(value) # adding possibly inverted member value to multivalue string
-                
-                if (cfg&8): # value2status inversion
-                    value=(1^value) # member value not needed any more
-                
-                if (cfg&1): # status warning if value 1
-                    status=value # 
-                if (cfg&2): # status critical if value 1
-                    status=2*value 
-                
-                if status>sumstatus: # summary status is defined by the biggest member sstatus
-                    sumstatus=status # suurem jaab kehtima
-               
-                #print 'make_channel_svc():',val_reg,'member',member,'value after status proc',value,'status',status,'sumstatus',sumstatus  # temporary debug
-               
-                                        
-                #dichannels table update with new chg ja status values. no changes for values! chg bit 0 off! set ts_msg!
-                Cmd3="UPDATE dichannels set status='"+str(status)+"', ts_msg='"+str(int(ts))+"', chg='"+str(chg&2)+"' where val_reg='"+val_reg+"' and member='"+str(member)+"'" 
-                # bit0 from change flag stripped! this is to notify that this service is sent (due to change). may need other processing however.
-                #print Cmd3 # di reporting debug
-                conn3.execute(Cmd3) # kirjutamine
-                    
-                   
-                    
-            # sending service data into buffer table when the loop above is finished - only if they are up to date, according to ts_created
-            if sta_reg == val_reg: # only status will be sent!
-                val_reg=''
-                lisa=''
-                
-            #print mac,host,udpport,svc_name,sta_reg,status,val_reg,lisa,ts_created,inumm # temporary
-            Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','"+sta_reg+"','"+str(sumstatus)+"','"+val_reg+"','"+str(lisa)+"','"+str(int(ts_created))+"','','')" 
-            #print "di Cmd1=",Cmd1 # debug
-            
-            #juhitav filter oleks vaja et teatud andurite/signaalide tomblemisi valtida. 
-            #if (ts-ots > 2): # has NOT been updated lately, during 2 last seconds - ei ole hea, voib viimase oleku edastamata jatta!
-            conn1.execute(Cmd1) # kirjutamine - juhitav filter oleks vaja et teatud andurite/signaalide tomblemisi valtida.
-            #else:
-            #    print 'skipping di data '+sta_reg+'/'+val_reg+' send due to ts-ots <=2:'+str(ts-ots) # debug
+            if make_dichannel_svc(val_reg,sta_reg,chg) <> 0: # adds to buff2server if service (with all members) ok
+                msg='skipped sending val_reg, possibly due to stalled member data'
+                print(msg)
         
         conn1.commit() # buff2server
         conn3.commit() # dichannels transaction end
@@ -1052,14 +1002,111 @@ def make_dichannel_svc(): # di services into to-be-sent buffer table BUT only wh
     except Exception,err:
         traceback.print_exc()
         log2file('err: '+repr(err))
-        msg='there was a problem with make_dichannel_svc()!'
+        msg='there was a problem with make_dichannels()!'
         print(msg)
         log2file(msg)
         
+#make_dichannels() lopp
+
+
+
+
+def make_dichannel_svc(val_reg,sta_reg,chg):    # ONE service compiling and buffering into buff2server if ok
+    global mac, ts, appdelay
+    lisa='' # value string
+    sumstatus=0 # status calc
+    svc_name='' # unused? but must exist for insertion into buff2server    
+    Cmd3="select * from dichannels where val_reg='"+val_reg+"' order by member asc" # data for one service ###########
+    cursor3a.execute(Cmd3)
+    for srow in cursor3a: # ridu tuleb nii palju kui selle teenuse liikmeid, pole oluline milliste mba ja readd vahele jaotatud
+        #print 'row in cursor3a',srow # temporary debug
+        mba=0 # local here
+        regadd=0
+        bit=0 # 
+        member=0
+        cfg=0
+        ostatus=0 # previous value
+        #tvalue=0 # test
+        oraw=0
+        ovalue=0 # previous or averaged value
+        ots=0 # previous update timestamp
+        avg=0 # averaging strength, has effect starting from 2
+        desc=''
+        comment=''
+        # 0      1   2     3      4      5     6     7     8    9     10   11   12      13     14 
+        #(mba,regadd,bit,val_reg,member,cfg,block,value,status,ts_chg,chg,desc,comment,ts_msg,type integer) # dichannels
+        if srow[0]<>'':
+            mba=int(srow[0])
+        if srow[1]<>'':
+            regadd=int(srow[1]) # must be int! can be missing
+        if srow[2]<>'':
+            bit=int(srow[2])
+        val_reg=srow[3] #  string
+        if srow[4]<>'':
+            member=int(srow[4])
+        if srow[5]<>'':
+            cfg=int(srow[5]) # configuration byte 
+        # block?? to p[revent sending service with errors. to be added!
+        if srow[7]<>'': 
+            value=int(srow[7]) # new value
+        if srow[8]<>'':
+            ostatus=int(srow[8]) # old status
+        if srow[9]<>'': 
+            ots=int(srow[9]) # value ts timestamp
         
-#make_dichannel_svc() lopp
+        if (ts-ots > 2*appdelay): # too old data, break! not updated lately
+            print 'old dichannels bit,ts,ots,age',bit,ts,ots,ts-ots # debug
+            return 1  # stale data, not to be sent!
+            
+        desc=srow[11] # description for UI
+        comment=srow[11] # comment internal
 
-
+    
+        #print 'make_dichannel_svc():',val_reg,'member',member,'value before status proc',value,', lisa',lisa  # temporary debug
+       
+        if lisa<>"": # not the first member any nmore
+            lisa=lisa+" "
+            
+        # status and inversions according to configuration byte
+        status=0 # initially for each member
+        if (cfg&4): # value2value inversion
+            value=(1^value) # possible member values 0 voi 1
+        lisa=lisa+str(value) # adding possibly inverted member value to multivalue string
+        
+        if (cfg&8): # value2status inversion
+            value=(1^value) # member value not needed any more
+        
+        if (cfg&1): # status warning if value 1
+            status=value # 
+        if (cfg&2): # status critical if value 1
+            status=2*value 
+        
+        if status>sumstatus: # summary status is defined by the biggest member sstatus
+            sumstatus=status # suurem jaab kehtima
+       
+        #print 'make_channel_svc():',val_reg,'member',member,'value after status proc',value,', status',status,', sumstatus',sumstatus,', lisa',lisa  # temporary debug
+       
+                                
+        #dichannels table update with new chg ja status values. no changes for values! chg bit 0 off! set ts_msg!
+        Cmd3="UPDATE dichannels set status='"+str(status)+"', ts_msg='"+str(int(ts))+"', chg='"+str(chg&2)+"' where val_reg='"+val_reg+"' and member='"+str(member)+"'" 
+        # bit0 from change flag stripped! this is to notify that this service is sent (due to change). may need other processing however.
+        #print Cmd3 # di reporting debug
+        conn3.execute(Cmd3) # kirjutamine
+            
+           
+            
+    # sending service data into buffer table when the loop above is finished - only if they are up to date, according to ts_created
+    if sta_reg == val_reg: # only status will be sent!
+        val_reg=''
+        lisa=''
+        
+    #print mac,host,udpport,svc_name,sta_reg,status,val_reg,lisa,ts_created,inumm # temporary
+    Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','"+sta_reg+"','"+str(sumstatus)+"','"+val_reg+"','"+str(lisa)+"','"+str(int(ts_created))+"','','')" 
+    #print "di Cmd1=",Cmd1 # debug
+    conn1.execute(Cmd1) # write dichannels data into buff2server
+    return 0
+           
+           
 
     
 def read_counters(): # counters, usually 32 bit / 2 registers.
@@ -1163,7 +1210,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                 wcount=srow[19] # word count - to be used as read_register() param 3
             
                 if mba>=0 and mba<256 and regadd>=0 and regadd<65536:  # legal values for mba and regaddr
-                    print 'reading counter value from mba',mba,'regadd',regadd,'for val_reg',val_reg,'member',member,'wcount',wcount,  # debug
+                    print 'counter',mba,regadd,'for',val_reg,'m',member, #'wcount',wcount,  # debug
                     
                     #MBsta[mba-1]=respcode
                     try: # if respcode == 0: # got tcpdata as counter value
@@ -1213,13 +1260,13 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                             print "read_counters val_reg",val_reg,"member",member,"ai2scale PARAMETERS INVALID:",x1,x2,'->',y1,y2,'conversion not used!'
                             # jaab selline value nagu oli
                         
-                        print 'counter raw',tcpdata,', converted value',value,', oraw',oraw,', ovalue',ovalue,', avg',avg, # the same line continued with next print
+                        print 'counter raw',tcpdata,', value',value,', oraw',oraw,', ovalue',ovalue,', avg',avg, # the same line continued with next print
                         
                         if avg>1 and abs(value-ovalue)<value/2:  # averaging the readings. big jumps (more than 50% change) are not averaged.
                             value=int(((avg-1)*ovalue+value)/avg) # averaging with the previous value, works like RC low pass filter
-                            print ', averaged value',value # ,'rawdiff',abs(raw-oraw),'raw/2',raw/2
+                            print ', avg on, value',value # ,'rawdiff',abs(raw-oraw),'raw/2',raw/2
                         else:
-                            print ', no averaging, value becomes',value
+                            print ', no avg, value becomes',value
                             
                         
                         # check limits and set statuses based on that
@@ -1359,11 +1406,11 @@ def report_setup(): # send setup data to server via buff2server table as usual.
             #print "stp Cmd1=",Cmd1 # temporary debug
             conn1.execute(Cmd1)
               
-            if OSTYPE == 'linux': # no modbusproxy in use then
-                if 'S200' in val_reg: # mac stored temporarely instead of discovery
-                    oldmac=mac
-                    mac=reg_val
-                    print 'controller id set to',mac,', was',oldmac
+            #if OSTYPE == 'linux': # no modbusproxy in use then - change for rpi if needed
+            #    if 'S200' in val_reg: # mac stored temporarely instead of discovery
+            #        oldmac=mac
+            #        mac=reg_val
+            #        print 'controller id set to',mac,', was',oldmac
                     
                 
         conn1.commit() # buff2server trans lopp
@@ -1994,7 +2041,7 @@ inum=0 # returned datagram number to be used in send buffer cleaning
 blocklimit=3 # if block reached this then do not send
 TODO='' # signal to remember things to do
 tcperr=0
-ts=0 # timestamp s
+#ts=0 # timestamp s
 ts_created=0 # service creation and inserting into buff2server table
 ts_tried=0 # timestamp for last send trial
 ts_inumm=0 # inumm changed timestamp. to be increased if tyhe same for too long?
@@ -2018,7 +2065,7 @@ cfgnum=0 # config retry counter
 ts=time.mktime(datetime.datetime.now().timetuple()) #seconds now, with comma
 ts_boot=int(ts) # startimise aeg, UPV jaoks
 ts_lastappmain=ts # timestamp for last appmain run
-ts_lastnotify=ts # timestamp for last messaging out of registers
+ts_lastnotify=ts-200 # force sooner reporting after boot
 ts_udpsent=ts # last udp message sent, not received!
 ts_udpgot=ts # udp last received
 # the timestamps above cannot be 0 intially! some will start full reboot!
@@ -2260,6 +2307,7 @@ if stop == 0: # lock ok
 while stop == 0: # ################  MAIN LOOP BEGIN  ############################################################
     ts=time.mktime(datetime.datetime.now().timetuple()) #seconds now, with comma
     MONTS=str(int(ts)) # as integer, without comma
+    data='' # avoid old data to be processed again
     
     try: # if anything comes into udp buffer in 0.1s
         setup_change=0 # flag to detect possible setup changes
@@ -2759,21 +2807,28 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         
     # ###### FIRST THE THINGS TO DO MORE OFTEN, TO BE REPORTED ON CHANGE OR renotifydelay TIMEUT (INDIVIDUAL PER SERVICE!) ##########
     time.sleep(0.05) # try to avoid first false di reading after ai readings
-    mbcommresult=read_dichannel_bits()
-    if mbcommresult == 0: # ok, else incr err_dichannels
-        err_dichannels=0
-        make_dichannel_svc() # di related service messages creation, insert message data into buff2server to be sent to the server # tmp OFF!
-        write_dochannels() # compare the current and new channels values and write the channels to be changed with 
-    else:
-        err_dichannels=err_dichannels+1 # read data into sqlite tables
-    
+    #mbcommresult=read_dichannel_bits() # should be done by addresses, not all of the addresses are up perhaps...
+    ProxyState=read_dichannel_bits(255) # 0 if reading was possible, proxy sw running and responsive
+    if ProxyState == 0: # no idea of reading slaves behind the proxy if proxy is down
+        mbcommresult=read_dichannel_bits(1) # tegelikult vaja intelligentsemalt teha. esialgu vaid 1 ja 255 slave aadressid.
+        if mbcommresult == 0: # ok, else incr err_dichannels
+            msg='dichannels read success'
+            err_dichannels=0
+            make_dichannels() # di related service messages creation, insert message data into buff2server to be sent to the server # tmp OFF!
+            write_dochannels() # compare the current and new channels values and write the channels to be changed with 
+        else:
+            err_dichannels=err_dichannels+1 # read data into sqlite tables
+            msg='dichannels read failure, err_dichannels '+str(err_dichannels)
+            print(msg)
+        
+        
     if USBstate == 1: # USB running (but errors on channels)
-        if err_dichannels == 15: #reread dichannels.sql due to consecutive read errors'
+        if err_dichannels == 50: #reread dichannels.sql due to consecutive read errors'
             msg='going to reread dichannels.sql due to consecutive read errors'
             print(msg)
             log2file(msg)
             sqlread('dichannels')  # try to restore the table
-        if err_dichannels == 25: # recreate databases and stop
+        if err_dichannels == 250: # recreate databases and stop
             TODO='run,dbREcreate.py,0' # recreate databases before stopping
             stop=1  # restart via main.py due to dichannels problem
             msg='script will be stopped (and databases recreated) due to errors on binary inputs_dichannels'
@@ -2866,7 +2921,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         sendstring=sendstring+'SLW:'+str(GSMlevel)+' '+str(WLANlevel)+'\nSLS:0\n' # status to be added!
         
         
-        make_aichannels_svc() # put ai data into buff2server table to be sent to the server - only if successful reading!
+        make_aichannels() # put ai data into buff2server table to be sent to the server - only if successful reading!
         
         mbcommresult=read_counters() # read counters (2 registers usually, 32 bit) and put data into buff2server table to be sent to the server - only if successful reading!
         if mbcommresult == 0: # ok, else incr err_counters
@@ -2902,7 +2957,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         log2file(msg)
         ts_lastnotify=ts # remember timestamp
         
-        make_dichannel_svc() # test to fix renotify
+        make_dichannels() # test to fix renotify
         
         sendstring=sendstring+array2regvalue(MBsta,'EXW',2) # EXW, EXS reporting periodical based on MBsta[] for up to 4 modbus addresses
         sendstring=sendstring+array2regvalue(TCW,'TCW',0) # traffic TCW[] reporting periodical, no status above 0
@@ -2922,7 +2977,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         
         
         sendstring=sendstring+'UDW:'+str(PhoneUptime)+' '+str(ProxyUptime)+' '+str(USBuptime)+' '+str(AppUptime)+'\nUDS:' # diagnostic uptimes, add status!
-        if USBuptime>1800 and AppUptime>1800:
+        if USBuptime>900 and AppUptime>1800:
             sendstring=sendstring+'0\n' # ok
         else:
             sendstring=sendstring+'1\n' # warning about recent restart
