@@ -23,7 +23,7 @@ APVER='channelmonitor_pm.py 09.09.2013'  # using pymodbus! esialgu jamab, ei kor
 # 18.08.2013 counters fix, only last svc was sent to buff2server
 # 30.08.2013 finished di and ai age check, svc not to be reported if stale
 # 09.09.2013 fixed a few minor problems in dichannel_bits(). restored also PVW and T1W reporting, lost for a while for unknown reason. NO logging from now on!!!
-
+# 08.10.2013 log msg read_aichannels added for debugging
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -587,7 +587,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
 
             
                 if mba>=0 and mba<256 and regadd>=0 and regadd<65536:  # valid mba and regaddr, let's read to update value in aichannels table
-                    print 'reading ai',mba,regadd,'for',val_reg,'m',member, # 'temp skip!'  # ajutine
+                    msg='reading ai '+str(mba)+'.'+str(regadd)+' for '+val_reg+' m '+str(member) # 'temp skip!'  # ajutine
                     #return 1
                     #respcode=read_register(mba,regadd,1)  #  READING THE AI REGISTER
                     
@@ -595,7 +595,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                     try:
                         result = client.read_holding_registers(address=regadd, count=1, unit=mba)
                         tcpdata = result.registers[0] # reading modbus slave
-                        #print 'value',tcpdata
+                        msg=msg+' raw '+str(tcpdata)
                         if mba<5:
                             MBerr[mba]=0
                             
@@ -603,26 +603,29 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                             value=(tcpdata-x1)*(y2-y1)/(x2-x1) # lineaarteisendus
                             value=y1+value 
                             
-                            if value == y2: # ebanormaalne analoogsignaali kyllastus
-                                print 'skipping invalid value, equal to y2',y1
-                                return 1
+                            #if value == y2: # ebanormaalne analoogsignaali kyllastus
+                            #    print 'skipping invalid value, equal to y2',y1
+                            #    return 1  # see oli jama!! kp24 hvv naiteks
                                 
                             #print 'raw',tcpdata,', ovalue',ovalue, # debug
                             if avg>1 and abs(value-ovalue)<value/2: # keskmistame, hype ei ole suur
                             #if avg>1:  # lugemite keskmistamine vajalik, kusjures vaartuse voib ju ka komaga sailitada!
                                 value=((avg-1)*ovalue+value)/avg # averaging
-                                print ', averaged',value
+                                msg=msg+', averaged '+str(value)
                             else: # no averaging for big jumps
                                 if tcpdata == 4096: # this is error result from 12 bit 1wire temperature sensor
                                     value=ovalue # repeat the previous value. should count the errors to raise alarm in the end! counted error result is block, value 3 stps sending. 
                                 else: # acceptable non-averaged value
-                                    print ', no avg, value',value
+                                    msg=msg+', nonavg value '+str(value)
                                 
                         else:
                             print "val_reg",val_reg,"member",member,"ai2scale PARAMETERS INVALID:",x1,x2,'->',y1,y2,'value not used!'
                             value=0 
                             status=3 # not to be sent status=3! or send member as NaN? 
-                    
+                        
+                        print(msg)
+                        log2file(msg)
+ 
                     except: # else: # failed reading register, respcode>0
                         if mba<5:
                             MBerr[mba]=MBerr[mba]+1 # increase error counter
