@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 09.09.2013'  # using pymodbus! esialgu jamab, ei korda di! NO logging!
+APVER='channelmonitor_pm.py 08.10.2013'  # sama oli enne 09.09 using pymodbus! esialgu jamab, ei korda di! NO logging!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
