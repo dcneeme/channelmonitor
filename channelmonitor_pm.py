@@ -25,7 +25,7 @@ APVER='channelmonitor_pm.py 23.11.2013'  # sama oli enne 09.09 using pymodbus! e
 # 09.09.2013 fixed a few minor problems in dichannel_bits(). restored also PVW and T1W reporting, lost for a while for unknown reason. NO logging from now on!!!
 # 08.10.2013 log msg read_aichannels added for debugging
 # 08.11.2013 trying to get logcat dump in case of usb connectivity loss (on exit from running state)
-# 23.11.2013 logcat dump works using call
+# 23.11.2013 logcat dump works using call. do not attempt to recreate sqlite tables any more if USB state si not 0 (OK).
 
 
 # PROBLEMS and TODO
@@ -2295,6 +2295,24 @@ if stop == 0: # lock ok
         msg='proxy connected and readable'
         sendstring=sendstring+'S310:'+mac+'\nS300:'+UUID+'\nS0:'+ProxyVersion+'\nS302:'+SIMserial+'\n'
         udpsend(0,int(ts)) # no need for ack, thus inumm=0
+        
+        while channelconfig() > 0 and cfgnum<5: # do the setup but not for more than 5 times
+            msg='attempt no '+str(cfgnum+1)+' of 5 to configure modbus slave devices'
+            print msg
+            log2file(msg)
+            cfgnum=cfgnum+1
+            time.sleep(2)
+    
+        if cfgnum == 5: # failed proxy conn and setup...
+            msg='channelconfig() failure! giving up on try '+str(cfgnum)
+        else:
+            msg='channelconfig() success on try '+str(cfgnum)
+            MBsta=[0,0,0,0]
+        print(msg)
+        log2file(msg)
+        sys.stdout.flush()
+        time.sleep(1) #
+    
     else:
         msg='proxy CANNOT be connected and read!'
 
@@ -2304,26 +2322,7 @@ if stop == 0: # lock ok
     tcperr = 0 # ??
 
 
-    while channelconfig() > 0 and cfgnum<5: # do the setup but not for more than 10 times
-        msg='attempt no '+str(cfgnum+1)+' of 5 to contact proxy and configure devices, retrying in 2 seconds'
-        print msg
-        log2file(msg)
-        cfgnum=cfgnum+1
-
-
-    if cfgnum == 5: # failed proxy conn and setup...
-        msg='channelconfig() failure! giving up on try '+str(cfgnum)
-    else:
-        msg='channelconfig() success on try '+str(cfgnum)
-        MBsta=[0,0,0,0]
-    print(msg)
-    log2file(msg)
-    sys.stdout.flush()
-    time.sleep(1) #
-
-    #print 'reporting setup',APVER # must be done twice, the second can be more successful with connection and mac known (tmp hack)
-    #time.sleep(1)
-    #report_setup() # sending to server on startup
+    
     SUPPORTHOST='www.itvilla.ee/support/pyapp/'+mac # now there is hope for valid supporthost, not with pyapp/000000000000 # replace with sql data
 
 
@@ -2851,7 +2850,8 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     time.sleep(0.05) # try to avoid first false di reading after ai readings
     #mbcommresult=read_dichannel_bits() # should be done by addresses, not all of the addresses are up perhaps...
     ProxyState=read_dichannel_bits(255) # 0 if reading was possible, proxy sw running and responsive
-    if ProxyState == 0: # no idea of reading slaves behind the proxy if proxy is down
+    #if ProxyState == 0: # no idea in reading slaves behind the proxy if proxy is down
+    if USBstate == 1: # 23.11.2013 USB must be in running state before attempting to read registers from mba 1
         mbcommresult=read_dichannel_bits(1) # tegelikult vaja intelligentsemalt teha. esialgu vaid 1 ja 255 slave aadressid.
         if mbcommresult == 0: # ok, else incr err_dichannels
             msg='dichannels read success'
@@ -2864,7 +2864,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             print(msg)
 
 
-    if USBstate == 1: # USB running (but errors on channels)
+    #if USBstate == 1: # USB running (but errors on channels)
         if err_dichannels == 50: #reread dichannels.sql due to consecutive read errors'
             msg='going to reread dichannels.sql due to consecutive read errors'
             print(msg)
@@ -2917,9 +2917,6 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             msg='trying to reconnect to modbusproxy due to consecutive tcperr at '+str(ts)
             print(msg)
             log2file(msg)
-            #TODO='run,dbREcreate.py,0'
-            #stop=1
-            #ts_tcprestart=ts
             if socket_restart()>0: # failed to connect modbusproxy
                 tcperr=0 # restart error counter
             sys.stdout.flush()
@@ -2931,20 +2928,21 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         else:
             err_aichannels=err_aichannels+1 # read data into sqlite tables
 
-        if err_aichannels == 5: # reread aichannels
-            msg='going to reread aichannels.sql due to consecutive errors'
-            print(msg)
-            log2file(msg)
-            sqlread('aichannels')  # try to restore the table
-        if err_aichannels == 6: # recreate sql databases and stop
-            msg='going to recreate sql databases and stop due to errors with analogue channels'
-            print(msg)
-            log2file(msg)
-            TODO='run,dbREcreate.py,0' # recreate databases before stopping
-            stop=1  # restart via main.py due to sqlite problem
-            if OSTYPE == 'android':
-                droid.ttsSpeak(msg)
-                time.sleep(10)
+        if USBstate == 1: # but errors in register reading
+            if err_aichannels == 5: # reread aichannels
+                msg='going to reread aichannels.sql due to consecutive errors'
+                print(msg)
+                log2file(msg)
+                sqlread('aichannels')  # try to restore the table
+            if err_aichannels == 6: # recreate sql databases and stop
+                msg='going to recreate sql databases and stop due to errors with analogue channels'
+                print(msg)
+                log2file(msg)
+                TODO='run,dbREcreate.py,0' # recreate databases before stopping
+                stop=1  # restart via main.py due to sqlite problem
+                if OSTYPE == 'android':
+                    droid.ttsSpeak(msg)
+                    time.sleep(10)
 
     # ### NOW the ai and counter values, to be reported once in 30 s or so
     if ts>appdelay+ts_lastappmain:  # time to read analogue registers and counters, not too often
@@ -2971,19 +2969,20 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         else:
             err_counters=err_counters+1 # read data into sqlite tables
 
-        if err_counters == 5: # reread counters.sql
-            msg='going to reread counters.sql due to consecutive read errors'
-            print(msg)
-            log2file(msg)
-            sqlread('counters')  # try to restore the table
-        if err_counters == 6: # recreate databases
-            TODO='run,dbREcreate.py,0' # recreate databases before stopping
-            stop=1  # restart via main.py due to counters problem
-            msg='script will be stopped (and databases recreated) due to errors with counters'
-            log2file(msg) # log message to file
-            print(msg)
-            if OSTYPE == 'android':
-                droid.ttsSpeak(msg)
+        if USBstate == 1: #
+            if err_counters == 5: # reread counters.sql
+                msg='going to reread counters.sql due to consecutive read errors'
+                print(msg)
+                log2file(msg)
+                sqlread('counters')  # try to restore the table
+            if err_counters == 6: # recreate databases
+                TODO='run,dbREcreate.py,0' # recreate databases before stopping
+                stop=1  # restart via main.py due to counters problem
+                msg='script will be stopped (and databases recreated) due to errors with counters'
+                log2file(msg) # log message to file
+                print(msg)
+                if OSTYPE == 'android':
+                    droid.ttsSpeak(msg)
 
         # ############################################################ temporary check to debug di part here, not as often as normally
         #read_dichannel_bits() # di read as bitmaps from registers. use together with the make_dichannel_svc()!
