@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
  
-APVER='channelmonitor_pm.py 08.10.2013'  # sama oli enne 09.09 using pymodbus! esialgu jamab, ei korda di! NO logging!
+APVER='channelmonitor_pm.py 08.11.2013'  # sama oli enne 09.09 using pymodbus! esialgu jamab, ei korda di! NO logging!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -24,6 +24,8 @@ APVER='channelmonitor_pm.py 08.10.2013'  # sama oli enne 09.09 using pymodbus! e
 # 30.08.2013 finished di and ai age check, svc not to be reported if stale
 # 09.09.2013 fixed a few minor problems in dichannel_bits(). restored also PVW and T1W reporting, lost for a while for unknown reason. NO logging from now on!!!
 # 08.10.2013 log msg read_aichannels added for debugging
+# 08.11.2013 trying to get logcat dump in case of usb connectivity loss (on exit from running state)
+
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -85,18 +87,6 @@ def subexec(exec_cmd,submode): # submode 0 returns exit code, submode 1 returns 
         result = proc.communicate()[0]
         #proc.wait()
         return result
-    #proc=subprocess.Popen([exec_cmd], shell=True, stdout=DEVNULL, stderr=DEVNULL)
-    if submode == 0: # return exit status, 0 or more
-        #proc=subprocess.Popen([exec_cmd], shell=True, stdout=DEVNULL, stderr=DEVNULL)
-        proc=subprocess.Popen(exec_cmd, shell=True, stdout=DEVNULL, stderr=DEVNULL)
-        proc.wait()
-        return proc.returncode  # return just the subprocess exit code
-    else: # return everything from sdout
-        proc=subprocess.Popen([exec_cmd], shell=True, stdout=subprocess.PIPE)
-        result = proc.communicate()[0]
-        #proc.wait()
-        return result
-    
     
     
 def sqlread(table): # drops table and reads from file table.sql that must exist
@@ -162,6 +152,8 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
     WLANoldip=WLANip
     WLANip=''
     SIMserial=''
+    USBnewState=0
+    
     try:
         result = client.read_holding_registers(address=313, count=2, unit=255) # wlan ip
         for i in range(2):
@@ -180,7 +172,22 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
             logaddr=(loghost,logport) # global variable change
             
         result = client.read_holding_registers(address=200, count=1, unit=255) # USB state. 1 = running, disconnected
-        USBstate=result.registers[0]
+        USBnewState=result.registers[0]
+        if USBnewState <> USBstate and USBstate == 1: # was running but not any more, save logcat dump
+            msg="logcat dump to be saved due to USB not running any more"
+            log2file(msg)
+            try:
+                subexec('logcat -v time -df /sdcard/sl4a/scripts/d4c/'+str(int(ts))+'.log',0)
+                # if the resulting file exists, pack and push it
+            except:
+                type, value, trace = sys.exc_info()
+                #traceback.print_exc()
+                print type,value,trace
+                sys.stdout.flush()
+                time.sleep(3)
+                
+        USBstate=USBnewState
+        
         msg='read_proxy: USBstate='+str(USBstate) # 1 = running
         #log2file(msg) # debug
         
