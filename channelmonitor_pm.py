@@ -181,15 +181,34 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
             log2file(msg)
             time.sleep(10)
             try:
-                subexec(['/system/bin/logcat','-v','time','-df','/sdcard/sl4a/scripts/d4c/'+str(int(ts))+'.log'],0) # creates a log file
+                filename='/sdcard/sl4a/scripts/d4c/'+str(int(ts))+'.log' # file to dump logcat
+                returncode=subexec(['/system/bin/logcat','-v','time','-df',filename],0) # creates a log file
                 # if the resulting file exists, pack and push it
+                if returncode == 0:
+                    returncode=push(filename) # gz is created on the way
+                    if returncode == 0:
+                        print "file",filename,"successfully pushed"
+                        os.remove(filename+'.gz') # delete the successfully uploaded gz, no unpacked file left
+                    else:
+                        print " pushing file",filename,"FAILED!"
+                    time.sleep(6)
+                    
             except:
                 type, value, trace = sys.exc_info()
                 #traceback.print_exc()
                 print type,value,trace
                 sys.stdout.flush()
                 time.sleep(3)
-
+            
+            try:
+                os.rename(filename, 'logcat_last.log') # keep the last log only
+            except:
+                type, value, trace = sys.exc_info()
+                #traceback.print_exc()
+                print type,value,trace
+                sys.stdout.flush()
+                time.sleep(3)
+                
         USBstate=USBnewState
 
         msg='read_proxy: USBstate='+str(USBstate) # 1 = running
@@ -1776,7 +1795,7 @@ def push(filename): # send (gzipped) file to supporthost
         f_out.close()
         f_in.close()
         filename = filename+'.gz' # new filename to send
-        msg='the file was gzipped to '+filename+' with size '+str(os.stat(filename)[6])
+        msg='the file was gzipped to '+filename+' with size '+str(os.stat(filename)[6]) # the original file is kept!
         print(msg)
         log2file(msg)
 
