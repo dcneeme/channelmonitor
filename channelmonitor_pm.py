@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 08.11.2013'  # sama oli enne 09.09 using pymodbus! esialgu jamab, ei korda di! NO logging!
+APVER='channelmonitor_pm.py 23.11.2013'  # sama oli enne 09.09 using pymodbus! esialgu jamab, ei korda di! NO logging!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -25,6 +25,7 @@ APVER='channelmonitor_pm.py 08.11.2013'  # sama oli enne 09.09 using pymodbus! e
 # 09.09.2013 fixed a few minor problems in dichannel_bits(). restored also PVW and T1W reporting, lost for a while for unknown reason. NO logging from now on!!!
 # 08.10.2013 log msg read_aichannels added for debugging
 # 08.11.2013 trying to get logcat dump in case of usb connectivity loss (on exit from running state)
+# 23.11.2013 logcat dump works using call
 
 
 # PROBLEMS and TODO
@@ -79,9 +80,10 @@ def subexec(exec_cmd,submode): # submode 0 returns exit code, submode 1 returns 
     #proc=subprocess.Popen([exec_cmd], shell=True, stdout=DEVNULL, stderr=DEVNULL)
     if submode == 0: # return exit status, 0 or more
         #proc=subprocess.Popen([exec_cmd], shell=True, stdout=DEVNULL, stderr=DEVNULL)
-        proc=subprocess.Popen(exec_cmd, shell=True, stdout=DEVNULL, stderr=DEVNULL)
-        proc.wait()
-        return proc.returncode  # return just the subprocess exit code
+        #proc=subprocess.Popen(exec_cmd, shell=True, stdout=DEVNULL, stderr=DEVNULL)
+        returncode=subprocess.call(exec_cmd) # ootab kuni lopetab
+        #proc.wait()
+        return returncode  # return just the subprocess exit code
     else: # return everything from sdout
         proc=subprocess.Popen([exec_cmd], shell=True, stdout=subprocess.PIPE)
         result = proc.communicate()[0]
@@ -175,9 +177,11 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         USBnewState=result.registers[0]
         if USBnewState <> USBstate and USBstate == 1: # was running but not any more, save logcat dump
             msg="logcat dump to be saved due to USB not running any more"
+            print(msg)
             log2file(msg)
+            time.sleep(10)
             try:
-                subexec('logcat -v time -df /sdcard/sl4a/scripts/d4c/'+str(int(ts))+'.log',0)
+                subexec(['/system/bin/logcat','-v','time','-df','/sdcard/sl4a/scripts/d4c/'+str(int(ts))+'.log'],0) # creates a log file
                 # if the resulting file exists, pack and push it
             except:
                 type, value, trace = sys.exc_info()
@@ -189,6 +193,7 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         USBstate=USBnewState
 
         msg='read_proxy: USBstate='+str(USBstate) # 1 = running
+        print(msg) # debug
         #log2file(msg) # debug
 
         if USBstate == 1:
@@ -2184,6 +2189,13 @@ client = ModbusTcpClient(host=tcpaddr, port=tcpport); # defining modbusproxy for
 
 
 
+#print "logcat test"
+#subexec(['/system/bin/logcat','-v','time','-df','/sdcard/sl4a/scripts/d4c/'+str(int(ts))+'.log'],0) # ajutine
+# mingi viide millegiparast??
+
+
+
+
 
 if stop == 0: # lock ok
     buf=1024 # udb input
@@ -2311,7 +2323,6 @@ if stop == 0: # lock ok
     log2file(msg) # log message to file
     if OSTYPE == 'android':
         droid.ttsSpeak(msg)
-
 
 
 
