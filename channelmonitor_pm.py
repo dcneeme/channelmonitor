@@ -26,7 +26,7 @@ APVER='channelmonitor_pm.py 25.11.2013'  # sama oli enne 09.09 using pymodbus! e
 # 08.10.2013 log msg read_aichannels added for debugging
 # 08.11.2013 trying to get logcat dump in case of usb connectivity loss (on exit from running state)
 # 23.11.2013 logcat dump works using call. do not attempt to recreate sqlite tables any more if USB state si not 0 (OK).
-# 25.11.2013 removed path from logcat dump filename
+# 25.11.2013 removed path from logcat dump filename. FULLREBOOT su - s reboot in addition to 666 DEAD
 
 
 # PROBLEMS and TODO
@@ -35,6 +35,7 @@ APVER='channelmonitor_pm.py 25.11.2013'  # sama oli enne 09.09 using pymodbus! e
 # add sqlite tables test, start dbREcreate together with channelmonitor stopping if it feels necessary to restore normal operation!
 # udp connectivity is restored via reboot. try socket reopen...
 # 30.08.2013 - each ai svc should have max time and max chg to launch rereporting. to do with classes... and make xychannels and xyvalues sql separate!
+# this script should have rebooting ower itself, not only via modbusproxy! try pm reboot
 
 
 #modbusproxy registers / Only one register can be read  or write at time (registers are sometimes long)
@@ -177,7 +178,7 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         result = client.read_holding_registers(address=200, count=1, unit=255) # USB state. 1 = running, disconnected
         USBnewState=result.registers[0]
         if USBnewState <> USBstate and USBstate == 1: # was running but not any more, save logcat dump
-            msg="logcat dump to be saved due to USB not running any more"
+            msg="logcat dump to be saved due to USB not running any more" # peaks kohe teavitama!
             print(msg)
             log2file(msg)
             time.sleep(10)
@@ -2675,13 +2676,15 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             if TODO == 'FULLREBOOT': # full reboot, NOT just the application. android as well!
                 #stop=1 # cmd:FULLREBOOT
                 try:
-                    msg='started full reboot due to command'
+                    msg='started full reboot via su -c reboot' # enne proxyle 666 dead
                     log2file(msg)
                     print(msg)
                     if OSTYPE == 'android':
                         droid.ttsSpeak(msg)
                         time.sleep(10)
                         client.write_register(address=666, value=57005, unit=255) # full reboot, value in hex DEAD
+                        returncode=subexec(['su','-c','reboot'],0) # 2 channels for rebooting
+                        #print "returncode of command su -c reboot is",returncode
                         todocode=0
                 except:
                     todocode=1
