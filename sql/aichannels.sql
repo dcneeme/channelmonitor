@@ -28,29 +28,24 @@ CREATE TABLE aichannels(mba,regadd,val_reg,member,cfg,x1,x2,y1,y2,outlo,outhi,av
 -- INSERT INTO "aichannels" VALUES('','','T1W','2','0','0','100','0','100','0','','1','','0','50','0','','temp channel 1','lo limit',3); -- just a line on the graph
 -- INSERT INTO "aichannels" VALUES('','','T1W','3','0','0','100','0','100','0','','1','','500','500','0','','temp channel 1','hi limit',3); -- just a line on the graph
 
-INSERT INTO "aichannels" VALUES('1','2','PVW','1','17','205','1023','0','1000','0','1000','1','','','110','0','','pressure','ai1',2); -- 4..20mA sensor, voltage 1..5V
-INSERT INTO "aichannels" VALUES('','','PVW','2','0','0','100','0','100','0','','1','','0','0','0','','ai1','pressure lo limit',2); -- just a line on the graph
-INSERT INTO "aichannels" VALUES('','','PVW','3','0','0','100','0','100','0','','1','','500','1000','0','','ai1','pressure hi limit',2); -- just a line on the graph
+-- INSERT INTO "aichannels" VALUES('1','2','PVW','1','17','205','1023','0','5000','0','3000','1','','','110','0','','pressure','ai1',2); -- 4..20mA sensor, voltage 1..5V
+-- INSERT INTO "aichannels" VALUES('','','PVW','2','0','0','100','0','100','0','','1','','0','0','0','','ai1','pressure lo limit',2); -- just a line on the graph
+-- INSERT INTO "aichannels" VALUES('','','PVW','3','0','0','100','0','100','0','','1','','500','3000','0','','ai1','pressure hi limit',2); -- just a line on the graph
 
--- INSERT INTO "aichannels" VALUES('1','3','LVW','1','17','102','1023','0','3000','100','1000','1','','','110','0','','water level','ai2',2); -- 4..20mA sensor, voltage 1..5V
--- INSERT INTO "aichannels" VALUES('1','3','LVW','1','17','205','1023','0','3000','100','1000','1','','','110','0','','water level','ai2',2); -- 4..20mA sensor, voltage 1..5V
-INSERT INTO "aichannels" VALUES('1','3','LVW','1','17','205','1023','0','5000','100','1000','1','','','110','0','','water level','ai2',2); -- pyrksi kp3
-
+INSERT INTO "aichannels" VALUES('1','3','LVW','1','17','1023','4095','0','3000','100','1000','1','','','110','0','','water level','ai2',2); -- 4..20mA sensor, voltage 1..5V
 INSERT INTO "aichannels" VALUES('','','LVW','2','0','0','100','0','100','0','','1','','0','100','0','','level lo warning','lo limit',2); -- just a line on the graph
 INSERT INTO "aichannels" VALUES('','','LVW','3','0','0','100','0','100','0','','1','','0','1000','0','','level hi warning','hi limit',2); -- just a line on the graph
 
--- INSERT INTO "aichannels" VALUES('1','4','I1W','1','17','102','1023','0','50000','1000','10000','2','','','110','0','','pump1 current mA','ai3',2); -- kp15 125 ohm
--- INSERT INTO "aichannels" VALUES('1','5','I1W','2','17','102','1023','0','50000','1000','10000','2','','','110','0','','pump1 current mA','ai4',2); -- kp15 125 ohm
-INSERT INTO "aichannels" VALUES('1','4','I1W','1','17','410','1023','0','20000','1000','10000','2','','','110','0','','pump1 current mA','ai3',2); -- 4..20mA sensor, voltage 1..5V
-INSERT INTO "aichannels" VALUES('1','5','I1W','2','17','410','1023','0','20000','1000','10000','2','','','110','0','','pump1 current mA','ai4',2); -- 4..20mA sensor, voltage 1..5V
--- INSERT INTO "aichannels" VALUES('1','4','I1W','1','17','205','1023','0','25000','1000','10000','2','','','110','0','','pump1 current mA','ai3',2); -- 4..20mA sensor, voltage 1..5V
--- INSERT INTO "aichannels" VALUES('1','5','I1W','2','17','205','1023','0','25000','1000','10000','2','','','110','0','','pump1 current mA','ai4',2); -- 4..20mA sensor, voltage 1..5V
+INSERT INTO "aichannels" VALUES('1','4','I1W','1','17','1023','4095','0','25000','1000','10000','2','','','110','0','','pump1 current mA','ai3',2); -- 4..20mA sensor, voltage 1..5V
+INSERT INTO "aichannels" VALUES('1','5','I1W','2','17','1023','4095','0','25000','1000','10000','2','','','110','0','','pump1 current mA','ai4',2); -- 4..20mA sensor, voltage 1..5V
 INSERT INTO "aichannels" VALUES('','','I1W','3','0','0','100','0','100','0','','1','','0','1000','0','','current lo warning','lo limit',2); -- just a line on the graph
 INSERT INTO "aichannels" VALUES('','','I1W','4','0','0','100','0','100','0','','1','','0','10000','0','','current hi warning','hi limit',2); -- just a line on the graph
 
 -- INSERT INTO "aichannels" VALUES('1','3','33V','1','0','0','1023','0','5000','50','500','1','','','3300','0','','3V3 chk ai5','akutoite pingekontroll',3); -- 3.3V chk
 
-INSERT INTO "aichannels" VALUES('1','7','T1W','1','17','143','358','200','1250','50','500','3','','','110','0','','temp channel 2','ai7 voltage',3); -- tc1047 sensor
+-- INSERT INTO "aichannels" VALUES('1','7','T1W','1','17','143','358','200','1250','50','500','3','','','110','0','','temp channel 2','ai7 voltage',3); -- tc1047 sensor
+INSERT INTO "aichannels" VALUES('1','7','T1W','1','17','715','1750','200','1250','50','500','3','','','110','0','','temp channel 2','ai7 voltage',3); -- tc1047 sensor # siin 4V test
+
 INSERT INTO "aichannels" VALUES('','','T1W','2','0','0','100','0','100','0','','1','','0','50','0','','temp channel 1','lo limit',3); -- just a line on the graph
 INSERT INTO "aichannels" VALUES('','','T1W','3','0','0','100','0','100','0','','1','','0','500','0','','temp channel 1','hi limit',3); -- just a line on the graph
 

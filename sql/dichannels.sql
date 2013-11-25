@@ -7,7 +7,7 @@
 -- also power counting may be involved, see cfg 
 
 -- CONF BITS
--- # 1 - value 1 = warning (values can be 0 or 1 only)
+-- # 1 - value 1 = warningu (values can be 0 or 1 only)
 -- # 2 - value 1 = critical, 
 -- # 4 - value inversion 
 -- # 8 - value to status inversion
@@ -21,37 +21,22 @@ PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
 
 CREATE TABLE dichannels(mba,regadd,bit,val_reg,member,cfg,block,value,status,ts_chg,chg,desc,comment,ts_msg,type integer); -- ts_chg is update toime (happens on change only), ts_msg =notif
--- ts_chg used as ts_read now! change detection does not need that  timestamp!
 -- value is bit value 0 or 1, to become a member value with or without inversion
 -- status values can be 0..3, depending on cfg. member values to service value via OR (bigger value wins)
+-- if newvalue is different from value, write will happen. do not enter newvalues for read only register related rows.
 -- type is for category flagging, 0=do, 1 = di, 2=ai, 3=ti. use only 0 and 1 in this table
 
--- AI as di channels (1..4 are ai)
-INSERT INTO "dichannels" VALUES('1','1','6','R1W','1','21','0','0','1','0','','','ai7 as di','pumba olek R1W',1); -- pingega p1 on, adi7. w.
-INSERT INTO "dichannels" VALUES('1','1','7','R1W','2','21','0','0','1','0','','','ai8 as di','pumba olek R1W',1); -- p1 on, adi8
--- INSERT INTO "dichannels" VALUES('1','1','6','R1W','1','17','0','0','1','0','','','ai7 as di','pumba olek R1W',1); -- pingega p1 on, adi7. w. Pyrksi kp2
--- INSERT INTO "dichannels" VALUES('1','1','7','R1W','2','17','0','0','1','0','','','ai8 as di','pumba olek R1W',1); -- p1 on, adi8
+--AI as di channels (1..4 are ai)
+INSERT INTO "dichannels" VALUES('1','1','6','R1W','1','21','0','0','1','0','','','ai7 as di','R1W',1); -- pingega p1 on, adi7. w.
+INSERT INTO "dichannels" VALUES('1','1','7','R1W','2','21','0','0','1','0','','','ai8 as di','R1W',1); -- p1 on, adi8
 
-
--- di channels 1..8
--- INSERT INTO "dichannels" VALUES('1','1','8','F1W','1','17','0','0','1','0','','','mba1 DI1','f1w.1',1); -- inv kp26, pyrksi. risti kp1 crit!
--- INSERT INTO "dichannels" VALUES('1','1','9','F1W','2','17','0','0','0','0','','','mba1 DI2','f1w.2',1); -- inv kp26, pyrksi
-INSERT INTO "dichannels" VALUES('1','1','8','F1W','1','21','0','0','1','0','','','mba1 DI1','f1w.1',1); -- p1 ok, di1 Norm
+--di channels 1..8
+INSERT INTO "dichannels" VALUES('1','1','8','F1W','1','21','0','0','1','0','','','mba1 DI1','f1w.1',1); -- p1 ok, di1
 INSERT INTO "dichannels" VALUES('1','1','9','F1W','2','21','0','0','0','0','','','mba1 DI2','f1w.2',1); -- p2 ok, di2
-
-
--- INSERT INTO "dichannels" VALUES('1','1','10','APS','1','21','0','0','1','1','','','mba1 DI3','aps',1); -- pingepiirik, di3. norm cfg=21, kp25 =17
--- INSERT INTO "dichannels" VALUES('1','1','10','APS','1','17','0','0','1','1','','','mba1 DI3','aps kp25',1); -- pingepiirik haaps25, hullo1, hullo3, haaps kp4
-INSERT INTO "dichannels" VALUES('1','1','10','LFS','1','17','0','0','1','1','','','mba1 DI3','vesi porandal',1); -- pingepiiriku asemel porandaujuk kp5, kp11
-
-INSERT INTO "dichannels" VALUES('1','1','11','PWS','1','18','0','0','1','0','','','di4 as 230V chk','PWS',1); -- 230V norm =pingega! cfg 18 ja 30 moju on sama! 
--- INSERT INTO "dichannels" VALUES('1','1','11','PWS','1','22','0','0','1','0','','','di4 as 230V chk','PWS',1); -- kp23, kp25 inv pws! hullo1tmp
-
+INSERT INTO "dichannels" VALUES('1','1','10','APS','1','21','0','0','1','1','','','mba1 DI3','aps',1); -- pingepiirik, di3
+INSERT INTO "dichannels" VALUES('1','1','11','PWS','1','18','0','0','1','0','','','di4 as 230V chk','PWS',1); -- 230V norm pingega. cfg 18 ja 30 moju on sama! 
 INSERT INTO "dichannels" VALUES('1','1','12','LHS','1','26','0','0','1','0','','','ai8 as di','LHS',1); -- uputus, adi8
--- INSERT INTO "dichannels" VALUES('1','1','12','LHS','1','18','0','0','1','0','','','ai8 as di','LHS',1); -- uputus, adi8, kp4 inv
-
-INSERT INTO "dichannels" VALUES('1','1','13','BRS','1','18','0','0','1','0','','','mba1 DI6','BRS',1); -- uks, di6. w voltage=ok. 18 on oige! NORM 
--- INSERT INTO "dichannels" VALUES('1','1','13','BRS','1','22','0','0','1','0','','','mba1 DI6','BRS',1); -- 
+INSERT INTO "dichannels" VALUES('1','1','13','BRS','1','18','0','0','1','0','','','mba1 DI6','BRS',1); -- uks, di6. w voltage=ok. 18 on oige!
 
 -- INSERT INTO "dichannels" VALUES('1','1','14','D1W','7','0','0','0','1','0','','','mba1 DI7','',1); -- en mootja, vt counters
 -- INSERT INTO "dichannels" VALUES('1','1','15','D1W','8','0','0','0','1','1','','','mba1 DI8','',1); 

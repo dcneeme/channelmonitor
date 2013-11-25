@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 23.11.2013'  # sama oli enne 09.09 using pymodbus! esialgu jamab, ei korda di! NO logging!
+APVER='channelmonitor_pm.py 25.11.2013'  # sama oli enne 09.09 using pymodbus! esialgu jamab, ei korda di! NO logging!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -26,6 +26,7 @@ APVER='channelmonitor_pm.py 23.11.2013'  # sama oli enne 09.09 using pymodbus! e
 # 08.10.2013 log msg read_aichannels added for debugging
 # 08.11.2013 trying to get logcat dump in case of usb connectivity loss (on exit from running state)
 # 23.11.2013 logcat dump works using call. do not attempt to recreate sqlite tables any more if USB state si not 0 (OK).
+# 25.11.2013 removed path from logcat dump filename
 
 
 # PROBLEMS and TODO
@@ -181,11 +182,12 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
             log2file(msg)
             time.sleep(10)
             try:
-                filename='/sdcard/sl4a/scripts/d4c/'+str(int(ts))+'.log' # file to dump logcat
+                #filename='/sdcard/sl4a/scripts/d4c/'+str(int(ts))+'.log' # file to dump logcat_last
+                filename=str(int(ts))+'.log' # file to dump logcat, without long path
                 returncode=subexec(['/system/bin/logcat','-v','time','-df',filename],0) # creates a log file
                 # if the resulting file exists, pack and push it
                 if returncode == 0:
-                    returncode=push(filename) # gz is created on the way
+                    returncode=push(filename) # gz is created on the way, includes path!
                     if returncode == 0:
                         print "file",filename,"successfully pushed"
                         os.remove(filename+'.gz') # delete the successfully uploaded gz, no unpacked file left
