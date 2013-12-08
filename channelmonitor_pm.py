@@ -1,9 +1,9 @@
 #!/usr/bin/python
 # this script is 1) constantly updating the channel tables according to the modbus register content; 2) sending messages to the central server;
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
-# currently supported commands: REBOOT, FULLREBOOT, VARLIST, pull, push, sqlread, run
+# currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 27.11.2013'  # sama oli enne 09.09 using pymodbus! esialgu jamab, ei korda di! NO logging!
+APVER='channelmonitor_pm.py 25.11.2013'  # sama oli enne 09.09 using pymodbus! esialgu jamab, ei korda di! NO logging!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -28,8 +28,6 @@ APVER='channelmonitor_pm.py 27.11.2013'  # sama oli enne 09.09 using pymodbus! e
 # 23.11.2013 logcat dump works using call. do not attempt to recreate sqlite tables any more if USB state si not 0 (OK).
 # 25.11.2013 removed path from logcat dump filename. FULLREBOOT su - s reboot in addition to 666 DEAD
 # 25.11.2013 removed proxy 666 dead usage, kept subexec su - c reboot (impossible  to give the first grant to python if proxy reboot is used as well)
-# 27.11.2013 replace REBOOT with FULLREBOOT if proxy is not responsive (ProxyState<>0, no restart via main.py will happen then!)
-
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -2608,6 +2606,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 time.sleep(10)
 
 
+
         if TODO <> '': # yes, it seems there is something to do
             todocode=todocode+1 # limit the retrycount
 
@@ -2615,23 +2614,17 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 todocode=report_setup() # general setup from asetup/setup
                 todocode=todocode+report_channelconfig() # iochannels setup from modbus_channels/dichannels, aichannels, counters* - last ytd
 
-            if TODO == 'REBOOT': # reboot, just the application, not the system like android. 
-                if ProxyState <> 0: # if proxy is not responsive, do FULLREBOOT instead!
-                    TODO='FULLREBOOT'
-                    msg='replacing command REBOOT with full reboot due to proxy failure!'
-                    log2file(msg)
+            if TODO == 'REBOOT': # reboot, just the application, not the system like android.
+                stop=1 # cmd:REBOOT
+                todocode=0
+                msg='stopping for reboot due to command'
+                print(msg)
+                log2file(msg) # log message to file
+                sys.stdout.flush()
+                if OSTYPE == 'android':
                     droid.ttsSpeak(msg)
-                else:
-                    stop=1 # cmd:REBOOT
-                    todocode=0
-                    msg='stopping for reboot due to command'
-                    print(msg)
-                    log2file(msg) # log message to file
-                    sys.stdout.flush()
-                    if OSTYPE == 'android':
-                        droid.ttsSpeak(msg)
-                        time.sleep(10)
-                    time.sleep(1)
+                    time.sleep(10)
+                time.sleep(1)
 
             if TODO == 'WLANON':
                 todocode=0
