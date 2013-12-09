@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 25.11.2013'  # sama oli enne 09.09 using pymodbus! esialgu jamab, ei korda di! NO logging!
+APVER='channelmonitor_pm.py 09.12.2013'  # linux and python3 -compatible
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -28,6 +28,9 @@ APVER='channelmonitor_pm.py 25.11.2013'  # sama oli enne 09.09 using pymodbus! e
 # 23.11.2013 logcat dump works using call. do not attempt to recreate sqlite tables any more if USB state si not 0 (OK).
 # 25.11.2013 removed path from logcat dump filename. FULLREBOOT su - s reboot in addition to 666 DEAD
 # 25.11.2013 removed proxy 666 dead usage, kept subexec su - c reboot (impossible  to give the first grant to python if proxy reboot is used as well)
+# 08.12.2013 started modifications for olinuxino and python3.
+# 09.12.2013 udp comm fixed, .encode for python3 str needed
+
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -161,13 +164,14 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
     try:
         result = client.read_holding_registers(address=313, count=2, unit=255) # wlan ip
         for i in range(2):
-            if WLANip<>'':
+            if WLANip != '': # WLANip != '':
                 WLANip=WLANip+'.'
+                
             if i == 1: # second half
                 loghost=WLANip+str(result.registers[i]/256)+'.255'
             WLANip = WLANip+str(result.registers[i]/256)+'.'+str(result.registers[i]&255)
 
-        if WLANoldip<>WLANip:
+        if WLANoldip != WLANip:
             msg='read_proxy: WLAN ip changed from '+WLANoldip+' to '+WLANip+', broadcast to '+loghost
             print(msg)
             log2file(msg) # debug
@@ -177,7 +181,7 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
 
         result = client.read_holding_registers(address=200, count=1, unit=255) # USB state. 1 = running, disconnected
         USBnewState=result.registers[0]
-        if USBnewState <> USBstate and USBstate == 1: # was running but not any more, save logcat dump
+        if USBnewState != USBstate and USBstate == 1: # was running but not any more, save logcat dump
             msg="logcat dump to be saved due to USB not running any more" # peaks kohe teavitama!
             print(msg)
             log2file(msg)
@@ -190,16 +194,16 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
                 if returncode == 0:
                     returncode=push(filename) # gz is created on the way, includes path!
                     if returncode == 0:
-                        print "file",filename,"successfully pushed"
+                        print("file",filename,"successfully pushed")
                         os.remove(filename+'.gz') # delete the successfully uploaded gz, no unpacked file left
                     else:
-                        print " pushing file",filename,"FAILED!"
+                        print(" pushing file",filename,"FAILED!")
                     time.sleep(6)
                     
             except:
                 type, value, trace = sys.exc_info()
                 #traceback.print_exc()
-                print type,value,trace
+                print(type,value,trace)
                 sys.stdout.flush()
                 time.sleep(3)
             
@@ -208,7 +212,7 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
             except:
                 type, value, trace = sys.exc_info()
                 #traceback.print_exc()
-                print type,value,trace
+                print(type,value,trace)
                 sys.stdout.flush()
                 time.sleep(3)
                 
@@ -236,7 +240,7 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         #log2file(msg) # debug
         print(msg)
 
-        if what <> 'all':  # enough what we've read above for regular reading #########################
+        if what != 'all':  # enough what we've read above for regular reading #########################
             return 0
 
         ProxyVersion = read_hexstring(255,0,11) # 44 characters or emtpy
@@ -249,7 +253,7 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         msg='read_proxy: mac='+mac
         log2file(msg) # debug
         if OSTYPE == 'android':
-            while mac[0:3] <> 'D05': # invalid mac for sony xperia after reboot when wlan was off before reboot
+            while mac[0:3] != 'D05': # invalid mac for sony xperia after reboot when wlan was off before reboot
                 msg='invalid mac! switching wireless on and off'
                 print(msg)
                 log2file(msg)
@@ -270,7 +274,7 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
             droid.ttsSpeak('got the mac address ending with '+mac[-4:])
 
         result = client.read_holding_registers(address=302, count=10, unit=255) # sim serial
-        if result.registers[0]<>'0':
+        if result.registers[0] != '0':
             #log2file('simdec: '+repr(result.registers))
             for i in range(10):
                 if (result.registers[i]/256) == 0:
@@ -289,9 +293,9 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
 
 
         return 0
-    except Exception,err:
+    except: # Exception,err:
         traceback.print_exc()
-        log2file('err: '+repr(err))
+        #log2file('err: '+repr(err))
         msg='reading mbproxy failed'
         print(msg)
         return 1
@@ -304,9 +308,9 @@ def read_hexstring(mba,regaddr,regcount): # read from modbus register as hex str
         result = client.read_holding_registers(address=regaddr, count=regcount, unit=mba) # wlan mac
         for i in range(regcount):
             output = output + format("%04x" % result.registers[i])
-    except Exception,err:
+    except: # Exception,err:
         traceback.print_exc()
-        log2file('err: '+repr(err))
+        #log2file('err: '+repr(err))
 
     return output # hex string with lenghth 4 x count or empty
 
@@ -343,7 +347,7 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
             log2file(msg)
 
             if regok == 1:
-                if row[1] <>'': # value to WRITE  must not be empty
+                if row[1] != '': # value to WRITE  must not be empty
                     value=int(row[1]) # contains 16 bit word
                     msg='sending config wordh '+format("%04x" % value)+' to mba '+str(mba)+' regadd '+str(regadd)
                     time.sleep(0.1) # successive sending without delay may cause failures!
@@ -353,7 +357,7 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
                     except:
                         respcode=1
                     #MBsta[mba-1]=respcode
-                    if respcode<>0:
+                    if respcode != 0:
                         msg=msg+' - write_register() PROBLEM!'
                         print(msg)
                         log2file(msg)
@@ -383,11 +387,11 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
                     #send the actual data to the monitoring server
                     sendstring=sendstring+"R"+str(mba)+"."+str(regadd)+":"+str(tcpdata)+"\n"  # register content reported as decimal
 
-                except Exception,err:
+                except: # Exception,err:
                     msg=' - could not read back the register mba.reg '+str(mba)+'.'+str(regadd)
                     print(msg)
                     traceback.print_exc()
-                    log2file('err: '+repr(err))
+                    #log2file('err: '+repr(err))
                     time.sleep(1)
                     return 1
 
@@ -425,7 +429,7 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
         #mba,regadd,bit,bootvalue,value,rule,desc,comment
 
         # write coils first
-        Cmd3="select dochannels.mba,dochannels.regadd,dochannels.value from dochannels left join dichannels on dochannels.mba = dichannels.mba AND dochannels.regadd = dichannels.regadd AND dochannels.bit = dichannels.bit where dochannels.value <> dichannels.value and (dichannels.cfg & 32) group by dochannels.mba,dochannels.regadd "
+        Cmd3="select dochannels.mba,dochannels.regadd,dochannels.value from dochannels left join dichannels on dochannels.mba = dichannels.mba AND dochannels.regadd = dichannels.regadd AND dochannels.bit = dichannels.bit where dochannels.value != dichannels.value and (dichannels.cfg & 32) group by dochannels.mba,dochannels.regadd "
         # the command above retrieves mba, regadd and value for coils
         #print "Cmd3=",Cmd3
         cursor3.execute(Cmd3)
@@ -434,13 +438,13 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
             regadd=0
             mba=0
 
-            if row[0]<>'':
+            if row[0] != '':
                 mba=int(row[0]) # must be anumber
-            if row[1]<>'':
+            if row[1] != '':
                 regadd=int(row[1]) # must be a number
-            if row[1]<>'':
+            if row[1] != '':
                 value=int(row[2]) # 0 or 1 to be written
-            print 'going to write as a coil register mba,regadd,value',mba,regadd,value # temporary
+            print('going to write as a coil register mba,regadd,value',mba,regadd,value) # temporary
 
 
             try:
@@ -456,19 +460,19 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
             else:
                 MBerr[mba]=MBerr[mba]+1 # increase error count
                 if respcode ==2:
-                    print 'problem with coil',mba,regadd,value,'writing!'
+                    print('problem with coil',mba,regadd,value,'writing!')
 
         #conn3.commit()  # dicannel-bits transaction end
 
     except:
-        print 'problem with dochannel grp select!'
+        print('problem with dochannel grp select!')
         sys.stdout.flush()
 
     # end coil writing
 
 
     # write registers now. take values from dichannels and replace the bits found in dochannels. missing bits are zeroes.
-    Cmd3="select dochannels.mba,dochannels.regadd,dochannels.value,dochannels.bit from dochannels left join dichannels on dochannels.mba = dichannels.mba AND dochannels.regadd = dichannels.regadd AND dochannels.bit = dichannels.bit where dochannels.value <> dichannels.value and not(dichannels.cfg & 32) group by dochannels.mba,dochannels.regadd,dochannels.bit"
+    Cmd3="select dochannels.mba,dochannels.regadd,dochannels.value,dochannels.bit from dochannels left join dichannels on dochannels.mba = dichannels.mba AND dochannels.regadd = dichannels.regadd AND dochannels.bit = dichannels.bit where dochannels.value != dichannels.value and not(dichannels.cfg & 32) group by dochannels.mba,dochannels.regadd,dochannels.bit"
     # the command above retrieves mba, regadd that need to be written as 16 bit register
     #print "Cmd3=",Cmd3
     try:
@@ -481,19 +485,19 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
             bit=0
             value=0
 
-            if row[0]<>'':
+            if row[0] != '':
                 mba=int(row[0]) # must be anumber
-            if row[1]<>'':
+            if row[1] != '':
                 regadd=int(row[1]) # must be a number
-            if row[2]<>'':
+            if row[2] != '':
                 value=int(row[2]) # 0 or 1 to be written
-            if row[3]<>'':
+            if row[3] != '':
                 bit=int(row[3]) # bit, always 0 for coil, 0..15 for registers
 
             word=word+2**bit*value # adding bit values up to hget a word from bits 0..15. omitted bit values are 0 in the rsulting word!
 
-            if mba <> omba and omba<>0: # next mba, write register using omba now
-                print 'going to write a register mba,regadd,value',omba,regadd,word # temporary
+            if mba != omba and omba != 0: # next mba, write register using omba now
+                print('going to write a register mba,regadd,value',omba,regadd,word) # temporary
 
                 try: #
                     client.write_register(address=reg, value=word, unit=mba)
@@ -506,7 +510,7 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
 
                 else:
                     MBerr[locmba]=MBerr[locmba]+1
-                    print 'problem with register',mba,regadd,value,'writing!'
+                    print('problem with register',mba,regadd,value,'writing!')
                     #if respcode == 2: # register writing, gets converted to ff00 if value =1
                     #    socket_restart() # close and open tcpsocket
 
@@ -515,7 +519,7 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
         return 0
 
     except:
-        print 'problem with dichannel grp select in write_do_channels!'
+        print('problem with dichannel grp select in write_do_channels!')
         sys.stdout.flush()
         #time.sleep(1)
         #traceback.print_exc()
@@ -583,38 +587,38 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                 comment=''
                 # 0       1     2     3     4   5  6  7  8  9    10     11  12    13  14   15     16  17    18
                 #mba,regadd,val_reg,member,cfg,x1,x2,y1,y2,outlo,outhi,avg,block,raw,value,status,ts,desc,comment  # aichannels
-                if srow[0]<>'':
+                if srow[0] != '':
                     mba=int(srow[0]) # must be int! will be -1 if empty (setpoints)
-                if srow[1]<>'':
+                if srow[1] != '':
                     regadd=int(srow[1]) # must be int! will be -1 if empty
                 val_reg=srow[2] # see on string
-                if srow[3]<>'':
+                if srow[3] != '':
                     member=int(srow[3])
-                if srow[4]<>'':
+                if srow[4] != '':
                     cfg=int(srow[4]) # konfibait nii ind kui grp korraga, esita hex kujul hiljem
-                if srow[5]<>'':
+                if srow[5] != '':
                     x1=int(srow[5])
-                if srow[6]<>'':
+                if srow[6] != '':
                     x2=int(srow[6])
-                if srow[7]<>'':
+                if srow[7] != '':
                     y1=int(srow[7])
-                if srow[8]<>'':
+                if srow[8] != '':
                     y2=int(srow[8])
-                if srow[9]<>'':
+                if srow[9] != '':
                     outlo=int(srow[9])
-                if srow[10]<>'':
+                if srow[10] != '':
                     outhi=int(srow[10])
-                if srow[11]<>'':
+                if srow[11] != '':
                     avg=int(srow[11])  #  averaging strength, values 0 and 1 do not average!
-                if srow[12]<>'': # block - loendame siin vigu, kui kasvab yle 3? siis enam ei saada
+                if srow[12] != '': # block - loendame siin vigu, kui kasvab yle 3? siis enam ei saada
                     block=int(srow[12])  #
-                if srow[13]<>'': #
+                if srow[13] != '': #
                     oraw=int(srow[13])
-                if srow[14]<>'':
-                    ovalue=int(srow[14])
-                if srow[15]<>'':
+                if srow[14] != '':
+                    ovalue=int(float(srow[14])) # ovalue=int(srow[14])
+                if srow[15] != '':
                     ostatus=int(srow[15])
-                if srow[16]<>'':
+                if srow[16] != '':
                     ots=int(srow[16])
                 desc=srow[17]
                 comment=srow[18]
@@ -633,7 +637,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                         if mba<5:
                             MBerr[mba]=0
 
-                        if x1<>x2 and y1<>y2: # konf normaalne
+                        if x1 != x2 and y1 != y2: # konf normaalne
                             value=(tcpdata-x1)*(y2-y1)/(x2-x1) # lineaarteisendus
                             value=y1+value
 
@@ -645,15 +649,15 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                             if avg>1 and abs(value-ovalue)<value/2: # keskmistame, hype ei ole suur
                             #if avg>1:  # lugemite keskmistamine vajalik, kusjures vaartuse voib ju ka komaga sailitada!
                                 value=((avg-1)*ovalue+value)/avg # averaging
-                                msg=msg+', averaged '+str(value)
+                                msg=msg+', averaged '+str(int(value))
                             else: # no averaging for big jumps
                                 if tcpdata == 4096: # this is error result from 12 bit 1wire temperature sensor
                                     value=ovalue # repeat the previous value. should count the errors to raise alarm in the end! counted error result is block, value 3 stps sending.
                                 else: # acceptable non-averaged value
-                                    msg=msg+', nonavg value '+str(value)
+                                    msg=msg+', nonavg value '+str(int(value))
 
                         else:
-                            print "val_reg",val_reg,"member",member,"ai2scale PARAMETERS INVALID:",x1,x2,'->',y1,y2,'value not used!'
+                            print("val_reg",val_reg,"member",member,"ai2scale PARAMETERS INVALID:",x1,x2,'->',y1,y2,'value not used!')
                             value=0
                             status=3 # not to be sent status=3! or send member as NaN?
 
@@ -663,7 +667,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                     except: # else: # failed reading register, respcode>0
                         if mba<5:
                             MBerr[mba]=MBerr[mba]+1 # increase error counter
-                        print 'failed to read ai mb register', mba,regadd,'skipping aichannels table update'
+                        print('failed to read ai mb register', mba,regadd,'skipping aichannels table update')
                         return 1 # skipping aichannels update below
 
                 else:
@@ -749,9 +753,9 @@ def make_aichannels(): # send the ai service messages to the monitoring server (
 
             if make_aichannel_svc(val_reg,sta_reg) == 0: # successful svc insertion into buff2server
                 pass
-                print 'tried to report svc',val_reg,sta_reg
+                print('tried to report svc',val_reg,sta_reg)
             else:
-                print 'FAILED to report svc',val_reg,sta_reg
+                print('FAILED to report svc',val_reg,sta_reg)
                 return 1 #cancel
 
 
@@ -804,38 +808,38 @@ def make_aichannel_svc(val_reg,sta_reg):  # make a single service record based o
         comment=''
         # 0       1     2     3     4   5  6  7  8  9    10     11  12    13  14   15     16  17    18
         #mba,regadd,val_reg,member,cfg,x1,x2,y1,y2,outlo,outhi,avg,block,raw,value,status,ts,desc,comment  # aichannels
-        if srow[0]<>'':
+        if srow[0] != '':
             mba=int(srow[0]) # must be int! will be -1 if empty (setpoints)
-        if srow[1]<>'':
+        if srow[1] != '':
             regadd=int(srow[1]) # must be int! will be -1 if empty
         val_reg=srow[2] # see on string
-        if srow[3]<>'':
+        if srow[3] != '':
             member=int(srow[3])
-        if srow[4]<>'':
+        if srow[4] != '':
             cfg=int(srow[4]) # konfibait nii ind kui grp korraga, esita hex kujul hiljem
-        if srow[5]<>'':
+        if srow[5] != '':
             x1=int(srow[5])
-        if srow[6]<>'':
+        if srow[6] != '':
             x2=int(srow[6])
-        if srow[7]<>'':
+        if srow[7] != '':
             y1=int(srow[7])
-        if srow[8]<>'':
+        if srow[8] != '':
             y2=int(srow[8])
-        if srow[9]<>'':
+        if srow[9] != '':
             outlo=int(srow[9])
-        if srow[10]<>'':
+        if srow[10] != '':
             outhi=int(srow[10])
-        if srow[11]<>'':
+        if srow[11] != '':
             avg=int(srow[11])  #  averaging strength, values 0 and 1 do not average!
-        if srow[12]<>'': # block - loendame siin vigu, kui kasvab yle 3? siis enam ei saada
+        if srow[12] != '': # block - loendame siin vigu, kui kasvab yle 3? siis enam ei saada
             block=int(srow[12])  #
-        if srow[13]<>'': #
+        if srow[13] != '': #
             oraw=int(srow[13])
-        if srow[14]<>'':
-            ovalue=int(srow[14])
-        if srow[15]<>'':
+        if srow[14] != '':
+            ovalue=int(float(srow[14]))
+        if srow[15] != '':
             ostatus=int(srow[15])
-        if srow[16]<>'':
+        if srow[16] != '':
             ots=int(srow[16])
         desc=srow[17]
         comment=srow[18]
@@ -844,7 +848,7 @@ def make_aichannel_svc(val_reg,sta_reg):  # make a single service record based o
             mts=ots # latest update to the service must be not too old!
 
         if mba>=0 and mba<256 and regadd>=0 and regadd<65536:  # valid mba and regaddr, let's read to update value in aichannels table
-            print 'reporting ai service',val_reg,'member',member,'with value',ovalue  # ajutine
+            print('reporting ai service',val_reg,'member',member,'with value',ovalue)  # ajutine
 
         else:
             value=ovalue # possible setpoint, ovalue from aichannels table, no modbus reading for this
@@ -859,7 +863,7 @@ def make_aichannel_svc(val_reg,sta_reg):  # make a single service record based o
             print(msg)
             log2file(msg)
 
-        if lisa<>'': # not the first member
+        if lisa != '': # not the first member
             lisa=lisa+' ' # separator between member values
         lisa=lisa+str(ovalue) # adding member values into one string
 
@@ -903,21 +907,21 @@ def read_dichannel_bits(mba): # binary inputs, bit changes to be found and value
             regadd=0
             #mba=0
 
-            #if row[0]<>'':
+            #if row[0] != '':
             #    mba=int(row[0]) # must be number
-            #if row[1]<>'':
+            #if row[1] != '':
             #    regadd=int(row[1]) # must be number
-            if row[0]<>'':
+            if row[0] != '':
                 regadd=int(row[0]) # must be number
 
             #mcount=int(row[1])
-            if val_reg <> val_reg[:-1]+"S": #  only if val_reg does not end with S!
+            if val_reg != val_reg[:-1]+"S": #  only if val_reg does not end with S!
                 sta_reg=val_reg[:-1]+"S"
             else:
                 sta_reg='' # no status added to the datagram
 
             svc_name='' # unused?
-            #print 'reading dichannel register mba,regadd',mba,regadd, # temporary debug
+            #print('reading dichannel register mba,regadd',mba,regadd) # temporary debug
             try: # if respcode == 0: # successful DI register reading - continuous to catch changes! ################################
                 result = client.read_holding_registers(address=regadd, count=1, unit=mba) # respcode=read_register(mba,regadd,1) # 1 register at the time, from mb slave
                 tcpdata = result.registers[0]  # saab ka bitivaartusi lugeda!
@@ -925,7 +929,8 @@ def read_dichannel_bits(mba): # binary inputs, bit changes to be found and value
                     MBerr[mba]=0
                 #print ', result',format("%04x" % tcpdata)
             except:
-                print 'di register',mba,regadd,'read FAILURE! no sql update'
+                print('di register',mba,regadd,'read FAILURE! no sql update')
+                traceback.print_exc() # debug
                 return 1
 
             Cmd3="select bit,value from dichannels where mba='"+str(mba)+"' and regadd='"+str(regadd)+"' group by regadd,bit" # loeme koik di kasutusel bitid sellelt registrilt
@@ -937,15 +942,15 @@ def read_dichannel_bits(mba): # binary inputs, bit changes to be found and value
                     ovalue=0
                     chg=0 #  bit change flag
                     #mba and regadd are known
-                    if srow[0]<>'':
+                    if srow[0] != '':
                         bit=int(srow[0]) # bit 0..15
-                    if srow[1]<>'':
-                        ovalue=int(srow[1]) # bit 0..15
+                    if srow[1] != '':
+                        ovalue=int(float(srow[1])) # bit 0..15
                     value=(tcpdata&2**bit)/2**bit # bit value 0 or 1 instead of 1, 2, 4... / added 06.04
                     #print 'decoded value for bit',bit,value,'was',ovalue
 
                     # check if outputs must be written
-                    if value <> ovalue: # change detected, update dichannels value, chg-flag  - saaks ka maski alusel!!!
+                    if value != ovalue: # change detected, update dichannels value, chg-flag  - saaks ka maski alusel!!!
                         chg=3 # 2-bit change flag, bit 0 to send and bit 1 to process, to be reset separately
                         #ichg=ichg+2**bit # adding up into the change mask
                         msg='DIchannel '+str(mba)+'.'+str(regadd)+' bit '+str(bit)+' change! was '+str(ovalue)+', became '+str(value) # temporary
@@ -962,6 +967,7 @@ def read_dichannel_bits(mba): # binary inputs, bit changes to be found and value
                 if mba<5:
                     MBerr[mba]=MBerr[mba]+1 # increase error counter
                     msg='failed to read di register from '+str(mba)+'.'+str(regadd)
+                    traceback.print_exc() # debug
                     if MBerr[mba] == 1: # first error
                         print(msg) # di problem (first only)
                         log2file(msg) # di problem (first only)
@@ -974,8 +980,8 @@ def read_dichannel_bits(mba): # binary inputs, bit changes to be found and value
 
         return 0
 
-    except Exception,err:
-        log2file('err: '+repr(err))
+    except: # Exception,err:  # python3 ei taha seda viimast
+        #log2file('err: '+repr(err))
         msg='there was a problem with dichannels data reading or processing!'
         log2file(msg)
         print(msg)
@@ -1029,16 +1035,16 @@ def make_dichannels(): # di services into to-be-sent buffer table BUT only when 
             sta_reg=val_reg[:-1]+"S" # service status register name
 
 
-            if make_dichannel_svc(val_reg,sta_reg,chg) <> 0: # adds to buff2server if service (with all members) ok
+            if make_dichannel_svc(val_reg,sta_reg,chg) != 0: # adds to buff2server if service (with all members) ok
                 msg='skipped sending val_reg, possibly due to stalled member data'
                 print(msg)
 
         conn1.commit() # buff2server
         conn3.commit() # dichannels transaction end
 
-    except Exception,err:
+    except: # Exception,err:
         traceback.print_exc()
-        log2file('err: '+repr(err))
+        #log2file('err: '+repr(err))
         msg='there was a problem with make_dichannels()!'
         print(msg)
         log2file(msg)
@@ -1072,27 +1078,27 @@ def make_dichannel_svc(val_reg,sta_reg,chg):    # ONE service compiling and buff
         comment=''
         # 0      1   2     3      4      5     6     7     8    9     10   11   12      13     14
         #(mba,regadd,bit,val_reg,member,cfg,block,value,status,ts_chg,chg,desc,comment,ts_msg,type integer) # dichannels
-        if srow[0]<>'':
+        if srow[0] != '':
             mba=int(srow[0])
-        if srow[1]<>'':
+        if srow[1] != '':
             regadd=int(srow[1]) # must be int! can be missing
-        if srow[2]<>'':
+        if srow[2] != '':
             bit=int(srow[2])
         val_reg=srow[3] #  string
-        if srow[4]<>'':
+        if srow[4] != '':
             member=int(srow[4])
-        if srow[5]<>'':
+        if srow[5] != '':
             cfg=int(srow[5]) # configuration byte
         # block?? to p[revent sending service with errors. to be added!
-        if srow[7]<>'':
-            value=int(srow[7]) # new value
-        if srow[8]<>'':
-            ostatus=int(srow[8]) # old status
-        if srow[9]<>'':
+        if srow[7] != '':
+            value=int(float(srow[7])) # new value
+        if srow[8] != '':
+            ostatus=int(float(srow[8])) # old status
+        if srow[9] != '':
             ots=int(srow[9]) # value ts timestamp
 
         if (ts-ots > 2*appdelay): # too old data, break! not updated lately
-            print 'old dichannels bit,ts,ots,age',bit,ts,ots,ts-ots # debug
+            print('old dichannels bit,ts,ots,age',bit,ts,ots,ts-ots) # debug
             return 1  # stale data, not to be sent!
 
         desc=srow[11] # description for UI
@@ -1101,7 +1107,7 @@ def make_dichannel_svc(val_reg,sta_reg,chg):    # ONE service compiling and buff
 
         #print 'make_dichannel_svc():',val_reg,'member',member,'value before status proc',value,', lisa',lisa  # temporary debug
 
-        if lisa<>"": # not the first member any nmore
+        if lisa != "": # not the first member any nmore
             lisa=lisa+" "
 
         # status and inversions according to configuration byte
@@ -1209,60 +1215,60 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                 comment='' # comment internal
                 # 0       1     2     3     4   5  6  7  8  9    10     11  12    13   14   15    16  17   18
                 #mba,regadd,val_reg,member,cfg,x1,x2,y1,y2,outlo,outhi,avg,block,raw,value,status,ts,desc,comment  # counters
-                if srow[0]<>'':
+                if srow[0] != '':
                     mba=int(srow[0]) # modbus address
-                if srow[1]<>'':
+                if srow[1] != '':
                     regadd=int(srow[1]) # must be int! can be missing
                 val_reg=srow[2] # string
-                if srow[3]<>'':
+                if srow[3] != '':
                     member=int(srow[3])
-                if srow[4]<>'':
+                if srow[4] != '':
                     cfg=int(srow[4]) # config byte
-                if srow[5]<>'':
+                if srow[5] != '':
                     x1=int(srow[5])
-                if srow[6]<>'':
+                if srow[6] != '':
                     x2=int(srow[6])
-                if srow[7]<>'':
+                if srow[7] != '':
                     y1=int(srow[7])
-                if srow[8]<>'':
+                if srow[8] != '':
                     y2=int(srow[8])
-                if srow[9]<>'':
+                if srow[9] != '':
                     outlo=int(srow[9])
-                if srow[10]<>'':
+                if srow[10] != '':
                     outhi=int(srow[10])
-                if srow[11]<>'':
+                if srow[11] != '':
                     avg=int(srow[11])  #  averaging strenght, effective from 2
-                #if srow[12]<>'': # block
+                #if srow[12] != '': # block
                 #    block=int(srow[12]) # block / error count
-                if srow[13]<>'': # previous raw reading
+                if srow[13] != '': # previous raw reading
                     oraw=int(srow[13])
-                if srow[14]<>'': # previous converted value
+                if srow[14] != '': # previous converted value
                     ovalue=int(srow[14])
-                if srow[15]<>'':
+                if srow[15] != '':
                     ostatus=int(srow[15])
-                if srow[16]<>'':
+                if srow[16] != '':
                     ots=int(srow[16])
                 desc=srow[17]
                 comment=srow[18]
                 wcount=srow[19] # word count - to be used as read_register() param 3
 
                 if mba>=0 and mba<256 and regadd>=0 and regadd<65536:  # legal values for mba and regaddr
-                    print 'counter',mba,regadd,'for',val_reg,'m',member, #'wcount',wcount,  # debug
+                    print('counter',mba,regadd,'for',val_reg,'m',member) #'wcount',wcount)  # debug
 
                     #MBsta[mba-1]=respcode
                     try: # if respcode == 0: # got tcpdata as counter value
                         result = client.read_holding_registers(address=regadd, count=2, unit=mba) # respcode=read_register(mba,regadd,wcount). 32 bits!
                         if wcount == 2:
                             tcpdata = 65536*result.registers[0]+result.registers[1]
-                            print 'normal counter',str(mba),str(regadd),'result',tcpdata,'based on',str(result.registers[0]),str(result.registers[1]) # debug
+                            print('normal counter',str(mba),str(regadd),'result',tcpdata,'based on',str(result.registers[0]),str(result.registers[1])) # debug
                         else: # barionet, assumably -2
                             tcpdata = 65536*result.registers[1]+result.registers[0]  # wrong word order for counters in barionet!
-                            print 'barionet counter result',tcpdata,'based on',str(result.registers[1]),str(result.registers[0]) # debug
+                            print('barionet counter result',tcpdata,'based on',str(result.registers[1]),str(result.registers[0])) # debug
 
                         MBerr[mba]=0
                         raw=tcpdata # let's keep the raw
                         value=tcpdata # will be converted later
-                        if lisa<>"":
+                        if lisa != '':
                             lisa=lisa+" "
 
                         # CONFIG BYTE BIT MEANINGS
@@ -1281,29 +1287,29 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                         if (cfg&16): # power, increment to be calculated! divide increment to time from the last reading to get the power
                             if oraw>0: # last reading seems normal
                                 value=raw-oraw # RAW vahe leitud
-                                print 'counter raw inc',value, # temporary
+                                print('counter raw inc',value,) # temporary
                                 value=float(value/(ts-ots)) # power reading
-                                print 'timeperiod',ts-ots,'raw/time',value # temporary
+                                print('timeperiod',ts-ots,'raw/time',value) # temporary
                                 # end special processing for power
                             else:
                                 value=0
                                 status=3 # not to be sent
-                                print 'probably first run, no power calc result for',val_reg,'this time! value=0, status=3' # vaartuseks saadame None
+                                print('probably first run, no power calc result for',val_reg,'this time! value=0, status=3') # vaartuseks saadame None
 
-                        if x1<>x2 and y1<>y2: # seems like normal input data
+                        if x1 != x2 and y1 != y2: # seems like normal input data
                             value=(value-x1)*(y2-y1)/(x2-x1)
                             value=int(y1+value) # integer values to be reported only
                         else:
-                            print "read_counters val_reg",val_reg,"member",member,"ai2scale PARAMETERS INVALID:",x1,x2,'->',y1,y2,'conversion not used!'
+                            print("read_counters val_reg",val_reg,"member",member,"ai2scale PARAMETERS INVALID:",x1,x2,'->',y1,y2,'conversion not used!')
                             # jaab selline value nagu oli
 
-                        print 'counter raw',tcpdata,', value',value,', oraw',oraw,', ovalue',ovalue,', avg',avg, # the same line continued with next print
+                        print('counter raw',tcpdata,', value',value,', oraw',oraw,', ovalue',ovalue,', avg',avg,) # the same line continued with next print
 
                         if avg>1 and abs(value-ovalue)<value/2:  # averaging the readings. big jumps (more than 50% change) are not averaged.
                             value=int(((avg-1)*ovalue+value)/avg) # averaging with the previous value, works like RC low pass filter
-                            print ', avg on, value',value # ,'rawdiff',abs(raw-oraw),'raw/2',raw/2
+                            print(', avg on, value',value) # ,'rawdiff',abs(raw-oraw),'raw/2',raw/2
                         else:
-                            print ', no avg, value becomes',value
+                            print(', no avg, value becomes',value)
 
 
                         # check limits and set statuses based on that
@@ -1331,7 +1337,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                             if value>outlo+0.05*(outhi-outlo):
                                 status=0 # normal again
 
-                        print 'status for counter svc',val_reg,status,'due to cfg',cfg,'and value',value,'while limits are',outlo,outhi # debug
+                        print('status for counter svc',val_reg,status,'due to cfg',cfg,'and value',value,'while limits are',outlo,outhi) # debug
 
                         #if value<ovalue and ovalue < 4294967040: # this will restore the count increase during comm break
                         if value == 0 and ovalue >0: # possible pic reset. perhaps value <= 100?
@@ -1353,7 +1359,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
                                     client.write_register(address=regadd+1, value=(value&4294901760)/65536, unit=mba) # which one first for barionet?? chk this
                                     time.sleep(0.1)
                                 else:
-                                    print 'illegal counter configuration!',mba,regadd,wcount
+                                    print('illegal counter configuration!',mba,regadd,wcount)
 
                         #counters table update
                         Cmd3="UPDATE counters set status='"+str(status)+"', value='"+str(value)+"', raw='"+str(raw)+"', ts='"+str(int(ts))+"' where val_reg='"+val_reg+"' and member='"+str(member)+"'"
@@ -1388,7 +1394,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
         return 0 #respcode
 
     except: # end reading counters
-        print 'problem with counters read or processing'
+        print('problem with counters read or processing')
         traceback.print_exc()
         sys.stdout.flush()
         time.sleep(1)
@@ -1435,7 +1441,7 @@ def report_setup(): # send setup data to server via buff2server table as usual.
 
             val_reg=row[0] # muutuja  nimi
             reg_val=row[1] # string even if number!
-            print ' setup variable',val_reg,reg_val
+            print(' setup variable',val_reg,reg_val)
 
             # sending to buffer, no status counterparts! status=''
             Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','','','"+val_reg+"','"+reg_val+"','"+str(int(ts_created))+"','','')"
@@ -1460,7 +1466,7 @@ def report_setup(): # send setup data to server via buff2server table as usual.
         return 0
 
     except: # setup reading  problem
-        print 'problem with setup reading',Cmd4
+        print('problem with setup reading',Cmd4)
         traceback.print_exc()
         sys.stdout.flush()
         msg='setup reporting failure (setup reading problem) at '+str(int(ts))
@@ -1507,18 +1513,18 @@ def report_channelconfig(): #report *channels cfg part as XYn for each member to
         #             0    1     2     3       4     5   6
         cursor3.execute(Cmd3)
         for row in cursor3: # dichannels members to be reported
-            if row[0]<>'':
+            if row[0] != '':
                 mba=int(row[0])
-            if row[1]<>'':
+            if row[1] != '':
                 regadd=int(row[1])
             else:
                 regadd=0
-            if row[2]<>'':
+            if row[2] != '':
                 bit=int(row[2])
             val_reg=row[3]
-            if row[4]<>'':
+            if row[4] != '':
                 member=int(row[4])
-            if row[5]<>'':
+            if row[5] != '':
                 cfg=int(row[5])
             desc=row[6]
             reg=val_reg[:-1]+str(member) # konfiregister state tabelis sailitamiseks
@@ -1533,30 +1539,30 @@ def report_channelconfig(): #report *channels cfg part as XYn for each member to
         #             0      1    2        3     4  5  6  7  8  9     10    11  12
         cursor3.execute(Cmd3)
         for row in cursor3: # aichannels members to be reported
-            if row[0]<>'':
+            if row[0] != '':
                 mba=int(row[0])
-            if row[1]<>'':
+            if row[1] != '':
                 regadd=int(row[1])
             else:
                 regadd=0
             val_reg=row[2]
-            if row[3]<>'':
+            if row[3] != '':
                 member=int(row[3])
-            if row[4]<>'':
+            if row[4] != '':
                 cfg=int(row[4])
-            if row[5]<>'':
+            if row[5] != '':
                 x1=int(row[5])
-            if row[6]<>'':
+            if row[6] != '':
                 x2=int(row[6])
-            if row[7]<>'':
+            if row[7] != '':
                 y1=int(row[7])
-            if row[8]<>'':
+            if row[8] != '':
                 y2=int(row[8])
-            if row[9]<>'':
+            if row[9] != '':
                 outlo=int(row[9])
-            if row[10]<>'':
+            if row[10] != '':
                 outhi=int(row[10])
-            if row[11]<>'':
+            if row[11] != '':
                 avg=int(row[11])
             desc=row[12]
             reg=val_reg[:-1]+str(member) # konfiregister state tabelis sailitamiseks
@@ -1572,7 +1578,7 @@ def report_channelconfig(): #report *channels cfg part as XYn for each member to
         return 0
 
     except: # channels config reading  problem
-        print 'problem with channelconfig reading',Cmd4
+        print('problem with channelconfig reading',Cmd4)
         traceback.print_exc()
         sys.stdout.flush()
         msg='channelconfig reporting problem at '+str(int(ts))
@@ -1590,7 +1596,7 @@ def log2file(msg): # appending a line to the log file
     global LOG, ts, logaddr
     msg=msg+"\n" # add newline to the end
     try: # syslog first
-        UDPlogSock.sendto(msg,logaddr)
+        UDPlogSock.sendto(msg.encode('utf-8'),logaddr)
     except:
         pass # kui udp ei toimi, ei toimi ka syslog
         #print 'could NOT send syslog message to '+repr(logaddr)
@@ -1603,7 +1609,7 @@ def log2file(msg): # appending a line to the log file
             f.write(msg) # writing LOG
         return 0
     except:
-        print 'logging problem to file ',LOG
+        print('logging problem to file ',LOG)
         traceback.print_exc()
         sys.stdout.flush()
         time.sleep(1)
@@ -1630,7 +1636,7 @@ def unsent():  # delete unsent for too long messages - otherwise the udp message
             #print repr(rida) # debug
             mintscreated=int(rida[1])
             maxtscreated=int(rida[2])
-            print delcount,'services lines waiting ack for',3*retrydelay,'s to be deleted'
+            print(delcount,'services lines waiting ack for',3*retrydelay,'s to be deleted')
 
             #Cmd1="SELECT inum,svc_name,sta_reg,status,val_reg,value,ts_created,ts_tried from buff2server where ts_created+0+"+str(3*retrydelay)+"<"+str(ts) # debug
             #cursor1.execute(Cmd1) # debug
@@ -1681,7 +1687,7 @@ def udpmessage(): # udp message creation based on  buff2server data, does the re
     # instead of or before deleting the records could be moved to unsent2server table (not existing yet). dumped from there, to be sent later as gzipped sql file
 
     # limit 30 lisatud 19.06.2013
-    Cmd1="SELECT * from buff2server where ts_tried='' or (ts_tried+0>1358756016 and ts_tried+0<"+str(timetoretry)+") AND status+0<>3 order by ts_created asc limit 30"  # +0 to make it number! use no limit!
+    Cmd1="SELECT * from buff2server where ts_tried='' or (ts_tried+0>1358756016 and ts_tried+0<"+str(timetoretry)+") AND status+0 != 3 order by ts_created asc limit 30"  # +0 to make it number! use no limit!
     #print "send Cmd1=",Cmd1 # debug
     try:
         cursor1.execute(Cmd1)
@@ -1691,7 +1697,7 @@ def udpmessage(): # udp message creation based on  buff2server data, does the re
                 if inumm > 65535:
                     inumm=1 # avoid zero for sending
                     ts_inumm=ts # time to set new inumm value
-                    print "appmain: inumm increased to",inumm # DEBUG
+                    print("appmain: inumm increased to",inumm) # DEBUG
 
             svc_count=svc_count+1
             sta_reg=srow[4]
@@ -1700,9 +1706,9 @@ def udpmessage(): # udp message creation based on  buff2server data, does the re
             value=srow[7]
             ts_created=int(srow[8]) # no decimals needed, .0 always anyway
 
-            if val_reg<>'':
+            if val_reg != '':
                 sendstring=sendstring+val_reg+":"+str(value)+"\n"
-            if sta_reg<>'':
+            if sta_reg != '':
                 sendstring=sendstring+sta_reg+":"+str(status)+"\n"
 
             #lugesime read mis tuleb saata ja muutsime nende ts ning inumm
@@ -1722,10 +1728,10 @@ def udpmessage(): # udp message creation based on  buff2server data, does the re
             svc_count2=int(srow[0]) # total number of unsent messages
 
         if svc_count2>30: # do not complain below 30
-            print svc_count2,"SERVICE LINES IN BUFFER waiting for ack from monitoring server"
+            print(svc_count2,"SERVICE LINES IN BUFFER waiting for ack from monitoring server")
 
     except: # buff2server reading unsuccessful. unlikely...
-        print 'problem with buff2serverr read'
+        print('problem with buff2serverr read')
         traceback.print_exc()
         sys.stdout.flush()
         time.sleep(1)
@@ -1739,13 +1745,13 @@ def udpmessage(): # udp message creation based on  buff2server data, does the re
 
 
 def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debugging reason. if locnum==0, then no in: will be sent
-    global sendstring,mac,TCW, ts_udpsent, stop
+    global sendstring,mac,TCW, ts_udpsent, stop, saddr # saddr enne puudus!
     if sendstring == '': # nothing to send
-        print 'udpsend(): nothing to send!'
+        print('udpsend(): nothing to send!')
         return 1
 
-    if len(mac)<>12:
-        print 'invalid mac',mac
+    if len(mac) != 12:
+        print('invalid mac',mac)
         time.sleep(2)
         return 1 # do not send messages with invalid mac
 
@@ -1753,12 +1759,13 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
     if locnum >0: # in: to be added
         sendstring="in:"+str(locnum)+","+str(locts)+"\n"+sendstring
 
-    TCW[1]=TCW[1]+len(sendstring) # adding to the outgpoing UDP byte counter
+    #TCW[1]=TCW[1]+len(sendstring) # adding to the outgoing UDP byte counter
 
 
     try:
-        UDPSock.sendto(sendstring,saddr)
-        sendlen=len(sendstring)
+        sendlen=UDPSock.sendto(sendstring.encode('utf-8'),saddr) # tagastab saadetud baitide arvu
+        TCW[1]=TCW[1]+sendlen # traffic counter udp out
+        #sendlen=len(sendstring)
         #print "sent len",sendlen,"with in:"+str(locnum),sendstring[:66],"..." #sendstring
         msg='\nsent '+sendstring.replace('\n',' ')   # show as one line
         print(msg)
@@ -1766,7 +1773,7 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
         sendstring=''
         ts_udpsent=ts # last successful udp send
     except:
-        msg='udp send failure in udpsend(), lasting s '+str(int(ts - ts_udpsent))
+        msg='udp send failure in udpsend() to saddr '+repr(saddr)+', lasting s '+str(int(ts - ts_udpsent))
         log2file(msg)
         print(msg)
         # make sure flight mode is NOT on
@@ -1808,7 +1815,7 @@ def push(filename): # send (gzipped) file to supporthost
                             headers={'Authorization': 'Basic cHlhcHA6QkVMYXVwb2E='},
                             data={'mac': destinationdirectory}
                          )
-        print 'post response:',r.text # nothing?
+        print('post response:',r.text) # nothing?
         msg='the file '+filename+' is sent to '+destinationdirectory
         log2file(msg)
         print(msg)
@@ -1836,7 +1843,7 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
         log2file(msg)
         return 99 # illegal parameters or file bigger than stated during download resume
 
-    req = urllib2.Request('http://'+SUPPORTHOST+'/'+filename)
+    req = urllib2.Request('http://'+SUPPORTHOST+'/'+filename) # to be changed to requests
     #req.headers['Range'] = 'bytes=%s-%s' % (start, start+10000) # TEST to get piece by piece. bytes numbered from 0!
     req.headers['Range'] = 'bytes=%s-' % (start) # get from start until the end.  possible to continue in a loop if needed using 3G
     msg='trying to retrieve file '+SUPPORTHOST+'/'+filename+' from byte '+str(start)
@@ -1949,12 +1956,12 @@ def socket_restart(): # close and open tcpsocket
         time.sleep(1)
 
     except:
-        print 'tcp socket was not open'
+        print('tcp socket was not open')
         #traceback.print_exc() # debug
 
     # open a new socket
     try:
-        print 'opening tcp socket to modbusproxy,',tcpaddr, tcpport
+        print('opening tcp socket to modbusproxy,',tcpaddr, tcpport)
         tcpsocket = socket(AF_INET,SOCK_STREAM) # tcp / must be reopened if pipe broken, no reusage
         #tcpsocket = socket.socket(AF_INET,SOCK_STREAM) # tcp / must be reopened if pipe broken, no reusage
         tcpsocket.settimeout(5) #  conn timeout for modbusproxy. ready defines another (shorter) timeout after sending!
@@ -1967,7 +1974,7 @@ def socket_restart(): # close and open tcpsocket
         return 0
 
     except:
-        print 'modbusproxy socket open failed, to',tcpaddr, tcpport
+        print('modbusproxy socket open failed, to',tcpaddr, tcpport)
         #traceback.print_exc() # debug
         sys.stdout.flush() # to see the print lines above in log
         msg='modbusproxy reconnection failed at '+str(int(ts))
@@ -1994,7 +2001,7 @@ def array2regvalue(array,reg,stamax): # for reporting variables in arrays as mes
         stamax=2 # 2 is max allowed status for nagios
     output=reg+':' # string
     for member in range(len(array)): # 0 1 2 3
-        if output.split(':')[1] <> '': # there are something in sendstring already
+        if output.split(':')[1] != '': # there are something in sendstring already
             output=output+' '
         output=output+str(array[member])
         #print 'array2regvalue output',output # debug
@@ -2037,14 +2044,14 @@ import string
 
 #import syslog # only for linux, not android (logcat forwarded to external syslog there)
 import select
-import urllib2
+#import urllib2 # requests should be enough
 import gzip
 import tarfile
 import requests # for file upload
 #import logging
 
-from pymodbus.client.sync import ModbusTcpClient
-from pymodbus.register_read_message import *
+#from pymodbus.client.sync import ModbusTcpClient
+#from pymodbus.register_read_message import *
 
 host='0.0.0.0' # own ip for udp comm, should always work to send/receive udp data to the server, without socket binding
 tcpaddr=''
@@ -2140,41 +2147,24 @@ BattHealth=0
 BattCharge=0
 ts_USBrun=0 # timestamp to start running usb
 
-try: # is it linux?
-    OSTYPE=os.environ['OSTYPE'] #  == 'linux': # running on linux, not android
-    print 'seems to run on linux'
+#from pymodbus.client.sync import ModbusTcpClient as ModbusClient
+#from pymodbus.client.sync import ModbusSerialClient as ModbusClient
+from pymodbus.register_read_message import *
 
-    try:
-        print sys.argv[1],sys.argv[2] # <addr:ip> <sql_dir>
-    except:
-        print ' / parameters (socket and sql_dir) needed to run on linux!'
-        traceback.print_exc()
-        sys.exit()
 
-    try:
-        tcpport=int(sys.argv[1].split(':')[1]) # tcpport=502 # std modbusTCP port # set before
-        tcpaddr=sys.argv[1].split(':')[0] # "10.0.0.11" # ip to use for modbusTCP
-        print 'using',tcpaddr,tcpport
-    except:
-        print 'invalid address:port given',tcpaddr,tcpport
-        traceback.print_exc()
-        sys.exit()
 
-    from sqlite3 import dbapi2 as sqlite3 # in linux
-    os.chdir(sys.argv[2]) # ('/srv/scada/acomm/sql')
-    print os.getcwd()
 
-except: # android
-    OSTYPE='android'
+try: # is it android? using modbustcp then
     import android
     droid = android.Android()
-
     from android_context import Context
-    import os.path
-
     import android_network # android_network.py and android_utils.py must be present!
 
+    import os.path
+    from pymodbus.client.sync import ModbusTcpClient as ModbusClient # modbusTCP
 
+    OSTYPE='android'
+    
     tcpport=10502 # modbusproxy
     tcpaddr="127.0.0.1" # localhost ip to use for modbusproxy
     import BeautifulSoup # ?
@@ -2182,10 +2172,57 @@ except: # android
     import termios
     import sqlite3
     os.chdir('/sdcard/sl4a/scripts/d4c')
-    print os.getcwd()
-    #traceback.print_exc()  # debug
+    
+    print('running on android')
+    print(os.getcwd())
 
-print 'current dir',os.getcwd()
+except: # some linux
+    if 'ARCH' in os.uname()[2]: # if os.environ['PWD'] == '/root':   # olinuxino 
+        OSTYPE='archlinux'
+        from pymodbus.client.sync import ModbusSerialClient as ModbusClient # using serial modbusRTU
+        
+        print('running on archlinux')
+        os.chdir('/root/d4c') # OLINUXINO
+        import sqlite3
+        #import pyserial # is this needed?
+        
+        from droidcontroller.indata import InData
+        from droidcontroller.comm_system import CommSystem
+        from droidcontroller.comm_modbus import CommModbus
+        from droidcontroller.webserver import WebServer
+        
+        tcpport=0 # using pyserial
+        tcpaddr='' # no modbustcp address given
+    
+    else:
+        OSTYPE=os.environ['OSTYPE'] #  == 'linux': # running on linux, not android
+        OSTYPE='linux'
+        from pymodbus.client.sync import ModbusTcpClient as ModbusClient # modbusTCP
+        
+        print('running on generic linux')   # argumente vaja!
+
+        try:
+            print(sys.argv[1],sys.argv[2]) # <addr:ip> <sql_dir>
+        except:
+            print('parameters (socket and sql_dir) needed to run on linux!')
+            traceback.print_exc()
+            sys.exit()
+
+        try:
+            tcpport=int(sys.argv[1].split(':')[1]) # tcpport=502 # std modbusTCP port # set before
+            tcpaddr=sys.argv[1].split(':')[0] # "10.0.0.11" # ip to use for modbusTCP
+            print('using',tcpaddr,tcpport)
+        except:
+            print('invalid address:port given',tcpaddr,tcpport)
+            traceback.print_exc()
+            sys.exit()
+
+        from sqlite3 import dbapi2 as sqlite3 # in linux
+        os.chdir(sys.argv[2]) # ('/srv/scada/acomm/sql')
+        print(os.getcwd())
+            
+    
+print('current dir',os.getcwd())
 
 
 
@@ -2207,13 +2244,10 @@ except: # lock active
 
 
 
-client = ModbusTcpClient(host=tcpaddr, port=tcpport); # defining modbusproxy for pymodbus
-
-
-
-#print "logcat test"
-#subexec(['/system/bin/logcat','-v','time','-df','/sdcard/sl4a/scripts/d4c/'+str(int(ts))+'.log'],0) # ajutine
-# mingi viide millegiparast??
+if tcpport != 0: # modbusTCP
+    client = ModbusClient(host=ip, port=port)
+else: # modbusRTU
+    client = ModbusClient(method='rtu', stopbits=1, bytesize=8, parity='E', baudrate=19200, timeout=0.2, port='/dev/ttyAPP0')
 
 
 
@@ -2227,7 +2261,7 @@ if stop == 0: # lock ok
     # shost ja udpport voiks ka parameetritega olla.
 
 
-    print "SERVER saddr",saddr,', MODBUSPROXY tcpaddr',tcpaddr,tcpport
+    print("SERVER saddr",saddr,', MODBUSPROXY tcpaddr',tcpaddr,tcpport)
 
     sys.stdout.flush() # to see the print lines above in log
     time.sleep(1) # start
@@ -2275,58 +2309,61 @@ if stop == 0: # lock ok
     cursor1.execute(Cmd1)
     conn1.commit()
     for row in cursor1:
-        print row[0],'svc records to be sent currently in buffer'
+        print(row[0],'svc records to be sent currently in buffer')
     time.sleep(1) # buff2server delete old if any
 
 
-    #if OSTYPE == 'android':
-    msg='waiting for modbusproxy connection'
-    print(msg)
-    log2file(msg)
-    while socket_restart == 0: # endless retry
-        tcperr = tcperr + 1
-        if tcperr%10 == 0:
-            msg='no tcp connection to modbusproxy'
-            print(msg)
-            log2file(msg)
-            #droid.ttsSpeak(msg) # does not work with every language settings!
-        time.sleep(1)
-
-    # try to read the wlan mac and sim card serial from the modbusproxy. then the setup can be sent to the server without reading the.
-    ProxyState=read_proxy('all') # wlan mac and a few other things to find out / getting here only if tcp conn ok
-    if ProxyState == 0: # ok
-        msg='proxy connected and readable'
-        sendstring=sendstring+'S310:'+mac+'\nS300:'+UUID+'\nS0:'+ProxyVersion+'\nS302:'+SIMserial+'\n'
-        udpsend(0,int(ts)) # no need for ack, thus inumm=0
-        
-        while channelconfig() > 0 and cfgnum<5: # do the setup but not for more than 5 times
-            msg='attempt no '+str(cfgnum+1)+' of 5 to configure modbus slave devices'
-            print msg
-            log2file(msg)
-            cfgnum=cfgnum+1
-            time.sleep(2)
-    
-        if cfgnum == 5: # failed proxy conn and setup...
-            msg='channelconfig() failure! giving up on try '+str(cfgnum)
-        else:
-            msg='channelconfig() success on try '+str(cfgnum)
-            MBsta=[0,0,0,0]
+    if tcpport != 0:  # modbuTCP
+        msg='waiting for modbusproxy connection'
         print(msg)
         log2file(msg)
-        sys.stdout.flush()
-        time.sleep(1) #
+        while socket_restart == 0: # endless retry
+            tcperr = tcperr + 1
+            if tcperr%10 == 0:
+                msg='no tcp connection to modbusproxy'
+                print(msg)
+                log2file(msg)
+                #droid.ttsSpeak(msg) # does not work with every language settings!
+            time.sleep(1)
+
+    # try to read the wlan mac and sim card serial from the modbusproxy. then the setup can be sent to the server without reading the.
+    if OSTYPE == 'android':
+        ProxyState=read_proxy('all') # wlan mac and a few other things to find out / getting here only if tcp conn ok
+        if ProxyState == 0: # ok
+            msg='proxy connected and readable'
+            sendstring=sendstring+'S310:'+mac+'\nS300:'+UUID+'\nS0:'+ProxyVersion+'\nS302:'+SIMserial+'\n'
+            udpsend(0,int(ts)) # no need for ack, thus inumm=0
+            
+            while channelconfig() > 0 and cfgnum<5: # do the setup but not for more than 5 times
+                msg='attempt no '+str(cfgnum+1)+' of 5 to configure modbus slave devices'
+                print(msg)
+                log2file(msg)
+                cfgnum=cfgnum+1
+                time.sleep(2)
+        
+            if cfgnum == 5: # failed proxy conn and setup...
+                msg='channelconfig() failure! giving up on try '+str(cfgnum)
+            else:
+                msg='channelconfig() success on try '+str(cfgnum)
+                MBsta=[0,0,0,0]
+            print(msg)
+            log2file(msg)
+            sys.stdout.flush()
+            time.sleep(1) #
+        
+        else:
+            msg='proxy CANNOT be connected and read!'
+
+        print(msg)
+        log2file(msg)
+        report_setup() # get the mac from setup
+        tcperr = 0 # ??
+    else: # linux eth? mac needed
+        mac=subexec('/root/d4c/getmac',1).decode("utf-8")  # find mac and convert byte array to string
+        print('mac',mac)
+
     
-    else:
-        msg='proxy CANNOT be connected and read!'
-
-    print(msg)
-    log2file(msg)
-    report_setup() # get the mac from setup
-    tcperr = 0 # ??
-
-
-    
-    SUPPORTHOST='www.itvilla.ee/support/pyapp/'+mac # now there is hope for valid supporthost, not with pyapp/000000000000 # replace with sql data
+    SUPPORTHOST='www.itvilla.ee/support/pyapp/'+mac 
 
 
     sendstring=array2regvalue(MBsta,'EXW',2) # adding EXW, EXS to sendstring based on MBsta[]
@@ -2336,7 +2373,7 @@ if stop == 0: # lock ok
     sys.stdout.flush()
     time.sleep(1)
 
-    print 'reporting setup again' # must be done twice, the second can be more successful with connection and mac known (tmp hack)
+    print('reporting setup again') # must be done twice, the second can be more successful with connection and mac known (tmp hack)
     report_setup() # sending some data from asetup/setup to server on startup
     report_channelconfig() # sending some data from modbuschannels/*channels to server on startup
     msg='starting the main loop' #  at '+str(int(ts))+'. mac '+mac+', saddr '+str(repr(saddr))+', modbusproxy '+tcpaddr+':'+str(tcpport)
@@ -2355,10 +2392,14 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
 
     try: # if anything comes into udp buffer in 0.1s
         setup_change=0 # flag to detect possible setup changes
-        data,raddr = UDPSock.recvfrom(buf)
+        rdata,raddr = UDPSock.recvfrom(buf)
+        data=rdata.decode("utf-8") # python3 related need due to mac in hex
+        
+        #print('got from monitoring server',repr(raddr),repr(data)) # debug
+        
         TCW[0]=TCW[0]+len(data) # adding top the incoming UDP byte counter
 
-        #print "got message from addr ",raddr," at ",ts,":",data.replace('\n', ' ') # showing datagram members received on one line, debug
+        #print("got message from addr ",raddr," at ",ts,":",data.replace('\n', ' ')) # showing datagram members received on one line, debug
         #syslog.syslog('<= '+data.replace('\n', ' ')) # also to syslog (communication with server only)
 
         if (int(raddr[1]) < 1 or int(raddr[1]) > 65536):
@@ -2366,7 +2407,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             print(msg)
             log2file(msg)
 
-        if raddr[0] <> shost:
+        if raddr[0] != shost:
             msg='illegal sender '+str(raddr[0])+' of message: '+data+' at '+str(int(ts))  # ignore the data received!
             print(msg)
             log2file(msg)
@@ -2374,8 +2415,8 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
 
         if "id:" in data: # mac aadress
             id=data[data.find("id:")+3:].splitlines()[0]
-            if id<>mac:
-                print "invalid id in server message from ", addr[0] # this is not for us
+            if id != mac:
+                print("invalid id in server message from ", addr[0]) # this is not for us
                 data='' # destroy the datagram, could be for another controller behind the same connection
             else:
                 ts_udpgot=ts # timestamp of last udp received
@@ -2404,7 +2445,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                         cursor1.execute(Cmd1) # selected
                         conn1.execute(Cmd3) # deleted
                     except:
-                        print 'problem with',Cmd3
+                        print('problem with',Cmd3)
                         traceback.print_exc()
                         sys.stdout.flush()
                         time.sleep(1)
@@ -2446,12 +2487,12 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                         for row in cursor1: # should be one row only
                             rowcount1=row[0] #number of rows still there with given inum
                             if row[0]>0:
-                                print "ack ERROR: there are still",row[0],"rows in buff2server with inum",inum
+                                print("ack ERROR: there are still",row[0],"rows in buff2server with inum",inum)
                             #else:
                                 #print ', rows with inum',inum,'deleted from buff2server' # debug
 
                     except:
-                        print 'trouble with',Cmd1
+                        print('trouble with',Cmd1)
                         traceback.print_exc()
                         sys.stdout.flush()
                         time.sleep(1)
@@ -2487,40 +2528,40 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                     line = lines[i].split(':')
                     sregister = line[0] # setup reg name
                     svalue = line[1] # setup reg value
-                    if sregister <> 'in' and sregister <> 'id': # others may be setup or command (cmd:)
+                    if sregister != 'in' and sregister != 'id': # others may be setup or command (cmd:)
                         msg='got setup/cmd reg:val '+sregister+':'+svalue  # need to reply in order to avoid retransmits of the command(s)
                         print(msg)
                         log2file(msg)
                         sendstring=sendstring+sregister+":"+svalue+"\n"  # add to the answer
                         udpsend(0,int(ts)) # send the response right away to avoid multiple retransmits
                         time.sleep(0.1)
-                        if sregister<>'cmd': # can be variables to be saved into setup table or to be restored. do not accept any setup values that are not in there already!
+                        if sregister != 'cmd': # can be variables to be saved into setup table or to be restored. do not accept any setup values that are not in there already!
                             if sregister[0] == 'W' or sregister[0] == 'B' or sregister[0] == 'S': # could be setup variable
-                                print 'need for setup change detected due to received',sregister,svalue,', setup_change so far',setup_change
+                                print('need for setup change detected due to received',sregister,svalue,', setup_change so far',setup_change)
                                 if setup_change == 0: # first setup variable in the message found (there can be several)
                                     setup_change=1 # flag it
                                     sCmd="BEGIN IMMEDIATE TRANSACTION" # setup table. there may be no setup changes, no need for empty transactions
                                     try:
                                         conn4.execute(sCmd) # setup transaction start
-                                        print 'transaction for setup change started'
+                                        print('transaction for setup change started')
                                     except:
-                                        print 'setup change problem'
+                                        print('setup change problem')
                                         traceback.print_exc()
                                         sys.stdout.flush()
                                         time.sleep(1)
 
 
                                 else: # already started
-                                    print 'setup_change continues' # debug
+                                    print('setup_change continues') # debug
 
 
                                 sCmd="update setup set value='"+str(svalue)+"', ts='"+str(int(ts))+"' where register='"+sregister+"'" # update only, no insert here!
-                                print sCmd # debug
+                                print(sCmd) # debug
                                 try: #
                                     conn4.execute(sCmd) # table asetup/setup
-                                    print 'setup change done',sregister,svalue
+                                    print('setup change done',sregister,svalue)
                                 except: #if not succcessful, then not a valid setup message
-                                    print 'assumed setup register',sregister,'not found in setup table! value',svalue,'ignored!'
+                                    print('assumed setup register',sregister,'not found in setup table! value',svalue,'ignored!')
                                     traceback.print_exc() # temporary debug only
                                     sys.stdout.flush()
                                     time.sleep(1)
@@ -2534,7 +2575,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                                     log2file(msg)
 
                                 if sregister == 'ECW': # counter volumes to be restored - sobita counters infoga!
-                                    print 'going to set counters 412 and 414' # debug
+                                    print('going to set counters 412 and 414') # debug
                                     if len(svalue.split(' ')) == 2: # member count for traffic: udpin, udpout, tcpin, tcpout in bytes
                                         mba = 1 # could be recreated fromm counters based on serveice names...
                                         try:
@@ -2556,12 +2597,12 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                             log2file(msg)
                             if TODO == '': # no change if not empty
                                 TODO=svalue # command content to be parsed and executed
-                                print 'TODO set to',TODO
+                                print('TODO set to',TODO)
                             else:
-                                print 'could not set TODO to',svalue,', TODO still',TODO
+                                print('could not set TODO to',svalue,', TODO still',TODO)
 
                     # all members that are not in or id were added to sendstring above!
-                    if sendstring<>'':
+                    if sendstring != '':
                         udpsend(0,int(ts))  # send back the ack for commands. this adds in and id always. no need for server ack, thus 0 instead of inumm
 
             if setup_change == 1: #there were some changes done  to setup
@@ -2570,7 +2611,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 if TODO == '':
                     TODO='VARLIST' # let's report setup without asking if setup was changed
                 else: # not empty, something still not done?
-                    print 'could not set TODO to VARLIST, was not empty:',TODO
+                    print('could not set TODO to VARLIST, was not empty:',TODO)
 
             #####
 
@@ -2583,7 +2624,8 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
 
     except:  # no new data in 0.1s waiting time
         #print '.',  #currently no udp response data on input, printing dot
-
+        #traceback.print_exc() # debug
+        
         unsent()  # delete from buff2server the services that are unsent for too long (3*renotifydelay)
 
         #something to do? chk udp communication first
@@ -2607,7 +2649,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
 
 
 
-        if TODO <> '': # yes, it seems there is something to do
+        if TODO != '': # yes, it seems there is something to do
             todocode=todocode+1 # limit the retrycount
 
             if TODO == 'VARLIST':
@@ -2666,7 +2708,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 if OSTYPE == 'android':
                     try:
                         dnsize=droid.checkWifiState().result
-                        print 'wlan state',dnsize
+                        print('wlan state',dnsize)
                         todocode=0
 
                     except:
@@ -2735,7 +2777,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
 
             if TODO.split(',')[0] == 'push': # upload a file (with name and passcode given)
                 filename=TODO.split(',')[1]
-                print 'starting push with',filename
+                print('starting push with',filename)
                 todocode=push(filename) # no automated retry here
 
 
@@ -2856,7 +2898,10 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     #mbcommresult=read_dichannel_bits() # should be done by addresses, not all of the addresses are up perhaps...
     ProxyState=read_dichannel_bits(255) # 0 if reading was possible, proxy sw running and responsive
     #if ProxyState == 0: # no idea in reading slaves behind the proxy if proxy is down
-    if USBstate == 1: # 23.11.2013 USB must be in running state before attempting to read registers from mba 1
+    #if USBstate == 1: # 23.11.2013 USB must be in running state before attempting to read registers from mba 1
+    if OSTYPE == 'android' and USBstate != 1: # android but usb down
+        pass
+    else: # in all other cases go ahead reading di channels
         mbcommresult=read_dichannel_bits(1) # tegelikult vaja intelligentsemalt teha. esialgu vaid 1 ja 255 slave aadressid.
         if mbcommresult == 0: # ok, else incr err_dichannels
             msg='dichannels read success'
@@ -2885,8 +2930,8 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 droid.ttsSpeak(msg)
                 time.sleep(10)
 
-    if MBsta<>MBoldsta: # change to be reported
-        print 'change in MBsta, from  to',MBoldsta,MBsta,'at',ts
+    if MBsta != MBoldsta: # change to be reported
+        print('change in MBsta, from  to',MBoldsta,MBsta,'at',ts)
         sendstring=sendstring+array2regvalue(MBsta,'EXW',2) # EXW, EXS reporting if changed
         MBoldsta=MBsta
 
@@ -2894,19 +2939,22 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     if ts>ts_interval1+interval1delay: # not to try too often, deal with other things too
         ts_interval1=ts
         #print 'MBoldsta, MBsta',MBoldsta,MBsta,'at',ts # report once in 5 seconds or so
-        if mac[0:3] == 'D05':
-            ProxyState=read_proxy('') # recheck the basic parameters accessible via modbusproxy
-        else:
-            ProxyState=read_proxy('all') # try to get the correct wlan mac mac
+        if OSTYPE == 'android':
+            if mac[0:3] == 'D05':
+                ProxyState=read_proxy('') # recheck the basic parameters accessible via modbusproxy
+            else:
+                ProxyState=read_proxy('all') # try to get the correct wlan mac mac
 
-        if ProxyState == 0:
-            tcperr=0
-            read_batt() # check the battery values and write them into sqlite tables aichannels, dichannels
-            #msg='outside read_proxy: phoneuptime '+str(PhoneUptime)+', proxyuptime '+str(ProxyUptime)+', gsmlevel '+str(GSMlevel)+', wlanlevel '+str(WLANlevel)
-            #log2file(msg) # debug
+            if ProxyState == 0:
+                tcperr=0
+                read_batt() # check the battery values and write them into sqlite tables aichannels, dichannels
+                #msg='outside read_proxy: phoneuptime '+str(PhoneUptime)+', proxyuptime '+str(ProxyUptime)+', gsmlevel '+str(GSMlevel)+', wlanlevel '+str(WLANlevel)
+                #log2file(msg) # debug
+            else:
+                tcperr=tcperr+1
         else:
-            tcperr=tcperr+1
-
+            tcperr=0 
+            
 
         if MBerr[0]+MBerr[1]+MBerr[2]+MBerr[3] > 0: # regular notif about modbus problems
             msg='MBerr '+str(repr(MBerr))+', tcperr '+str(tcperr)+', USBstate '+str(USBstate)
@@ -2915,7 +2963,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
 
 
         if err_dichannels+err_aichannels+err_counters>0: # print channel comm errors
-            print 'modbus errors di ai count',err_dichannels,err_aichannels,err_counters
+            print('modbus errors di ai count',err_dichannels,err_aichannels,err_counters)
         print
         if tcperr>4: # restart tcp socket
             #msg='trying to recreate the databases and restart due to consecutive tcperr at '+str(ts)
@@ -2933,7 +2981,10 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         else:
             err_aichannels=err_aichannels+1 # read data into sqlite tables
 
-        if USBstate == 1: # but errors in register reading
+        #if USBstate == 1: # but errors in register reading
+        if OSTYPE == 'android' and USBstate != 1: # android but usb down
+            pass
+        else:
             if err_aichannels == 5: # reread aichannels
                 msg='going to reread aichannels.sql due to consecutive errors'
                 print(msg)
@@ -2974,7 +3025,10 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         else:
             err_counters=err_counters+1 # read data into sqlite tables
 
-        if USBstate == 1: #
+        #if USBstate == 1: #
+        if OSTYPE == 'android' and USBstate != 1: # android but usb down
+            pass
+        else:
             if err_counters == 5: # reread counters.sql
                 msg='going to reread counters.sql due to consecutive read errors'
                 print(msg)
@@ -3034,7 +3088,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     #send it all away, some go via buff2server, some directly from here below
 
 
-    if sendstring<>'': # there is something to send, use udpsend()
+    if sendstring != '': # there is something to send, use udpsend()
         udpsend(0,int(ts)) # SEND AWAY. no need for server ack so using 0 instead of inumm
 
     # REGULAR MESSAGING RELATED PART END (AI, COUNTERS)
