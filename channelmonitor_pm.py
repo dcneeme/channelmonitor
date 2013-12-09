@@ -29,7 +29,7 @@ APVER='channelmonitor_pm.py 09.12.2013'  # linux and python3 -compatible
 # 25.11.2013 removed path from logcat dump filename. FULLREBOOT su - s reboot in addition to 666 DEAD
 # 25.11.2013 removed proxy 666 dead usage, kept subexec su - c reboot (impossible  to give the first grant to python if proxy reboot is used as well)
 # 08.12.2013 started modifications for olinuxino and python3.
-# 09.12.2013 udp comm fixed, .encode for python3 str needed
+# 09.12.2013 udp comm fixed, .encode for python3 str needed. still working with android too.
 
 
 # PROBLEMS and TODO
@@ -626,9 +626,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
 
                 if mba>=0 and mba<256 and regadd>=0 and regadd<65536:  # valid mba and regaddr, let's read to update value in aichannels table
                     msg='reading ai '+str(mba)+'.'+str(regadd)+' for '+val_reg+' m '+str(member) # 'temp skip!'  # ajutine
-                    #return 1
-                    #respcode=read_register(mba,regadd,1)  #  READING THE AI REGISTER
-
+                    
                     #if respcode == 0: # got  tcpdata as register content. convert to scale.
                     try:
                         result = client.read_holding_registers(address=regadd, count=1, unit=mba)
@@ -661,7 +659,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                             value=0
                             status=3 # not to be sent status=3! or send member as NaN?
 
-                        print(msg)
+                        print(msg) # temporarely off
                         log2file(msg)
 
                     except: # else: # failed reading register, respcode>0
@@ -1832,6 +1830,7 @@ def push(filename): # send (gzipped) file to supporthost
 
 def pull(filename,filesize,start): # uncompressing too if filename contains .gz and succesfully retrieved. start=0 normally. higher with resume.
     global SUPPORTHOST #
+    print('trying to retrieve file '+SUPPORTHOST+'/'+filename+' from byte '+str(start))
     oksofar=1 # success flag
     filename2='' # for uncompressed from the downloaded file
     filepart=filename+'.part' # temporary, to be renamed to filename when complete
@@ -1843,16 +1842,20 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
         log2file(msg)
         return 99 # illegal parameters or file bigger than stated during download resume
 
-    req = urllib2.Request('http://'+SUPPORTHOST+'/'+filename) # to be changed to requests
-    #req.headers['Range'] = 'bytes=%s-%s' % (start, start+10000) # TEST to get piece by piece. bytes numbered from 0!
-    req.headers['Range'] = 'bytes=%s-' % (start) # get from start until the end.  possible to continue in a loop if needed using 3G
-    msg='trying to retrieve file '+SUPPORTHOST+'/'+filename+' from byte '+str(start)
+    #req = urllib2.Request('http://'+SUPPORTHOST+'/'+filename) # to be changed to requests
+    req = 'http://'+SUPPORTHOST+'/'+filename
+    #req.headers['Range'] = 'bytes=%s-' % (start) # get from start until the end.  possible to continue in a loop if needed using 3G
+    pullheaders={'Range': 'bytes=%s-' % (start)} # with requests
+    
+    msg='trying to retrieve file '+SUPPORTHOST+'/'+filename+' from byte '+str(start)+' using '+repr(pullheaders)
     print(msg)
     log2file(msg)
     try:
-        response = urllib2.urlopen(req)
+        #response = urllib2.urlopen(req)
+        response = requests.get(req, headers=pullheaders) # with python3
         output = open(filepart,'wb')
-        output.write(response.read());
+        #output.write(response.read()) # was with urllib2
+        output.write(response.content)
         output.close()
     except:
         msg='pull: partial or failed download of temporary file '+filepart
@@ -2245,7 +2248,7 @@ except: # lock active
 
 
 if tcpport != 0: # modbusTCP
-    client = ModbusClient(host=ip, port=port)
+    client = ModbusClient(host=tcpaddr, port=tcpport)
 else: # modbusRTU
     client = ModbusClient(method='rtu', stopbits=1, bytesize=8, parity='E', baudrate=19200, timeout=0.2, port='/dev/ttyAPP0')
 
@@ -2629,7 +2632,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         unsent()  # delete from buff2server the services that are unsent for too long (3*renotifydelay)
 
         #something to do? chk udp communication first
-        if ts - ts_udpsent > 300: # no udp comm possible for some reason, try to reboot the phone
+        if ts - ts_udpsent > 300: # no udp comm possible for some reason, try to reboot the device
             TODO='FULLREBOOT' # send 255 666 dead
             msg='trying full reboot to restore outgoing monitoring messaging'
             log2file(msg) # log message to file
@@ -2651,11 +2654,15 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
 
         if TODO != '': # yes, it seems there is something to do
             todocode=todocode+1 # limit the retrycount
-
+            print('going to execute cmd',TODO)
+            
             if TODO == 'VARLIST':
                 todocode=report_setup() # general setup from asetup/setup
                 todocode=todocode+report_channelconfig() # iochannels setup from modbus_channels/dichannels, aichannels, counters* - last ytd
-
+                if todocode == 0:
+                    print(TODO,'execution success')
+                    #TODO='' # do not do it here! see the if end
+                    
             if TODO == 'REBOOT': # reboot, just the application, not the system like android.
                 stop=1 # cmd:REBOOT
                 todocode=0
@@ -2728,6 +2735,10 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                         returncode=subexec(['su','-c','reboot'],0) # 2 channels for rebooting
                         #print "returncode of command su -c reboot is",returncode
                         todocode=0
+                    else: # LINUX
+                        print('going to reboot now!')
+                        returncode=subexec(['reboot'],0) # linux
+                        
                 except:
                     todocode=1
                     msg='full reboot failed at '+str(int(ts))
@@ -2739,6 +2750,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
 
 
             if TODO.split(',')[0] == 'pull':
+                print('going to pull') # debug
                 if len(TODO.split(',')) == 3: # download a file (with name and size given)
                     filename=TODO.split(',')[1]
                     filesize=int(TODO.split(',')[2])
@@ -2774,7 +2786,8 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                             todocode=0
                 else:
                     todocode=1
-
+                    print('wrong number of parameters for pull')
+                    
             if TODO.split(',')[0] == 'push': # upload a file (with name and passcode given)
                 filename=TODO.split(',')[1]
                 print('starting push with',filename)
@@ -3003,18 +3016,19 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     # ### NOW the ai and counter values, to be reported once in 30 s or so
     if ts>appdelay+ts_lastappmain:  # time to read analogue registers and counters, not too often
         # this is the appmain part below
-        msg='appmain start at'+str(int(ts))+', time to renotify prg var '+str(int(ts-ts_lastnotify))+', syslog to '+loghost
-        print(msg)
+        msg='appmain start at '+str(int(ts))+', time to renotify prg var '+str(int(ts-ts_lastnotify))+', syslog to '+loghost
+        #print(msg)
         #log2file(msg) # debug
         ts_lastappmain=ts # remember the execution time
 
-        # signal levels to send. measured once in 5s
+        # signal levels to send. measured once in 5s if android
         #if GSMlevel == -115:  # flight mode, asu -1 . or 99? 0\n' # 0..31
         #sendstring=sendstring+'1\n'
-        msg='GSMlevel, WLANlevel are '+str(GSMlevel)+', '+str(WLANlevel)
-        print(msg)
-        log2file(msg)
-        sendstring=sendstring+'SLW:'+str(GSMlevel)+' '+str(WLANlevel)+'\nSLS:0\n' # status to be added!
+        if OSTYPE == 'android':
+            msg='GSMlevel, WLANlevel are '+str(GSMlevel)+', '+str(WLANlevel)
+            print(msg)
+            log2file(msg)
+            sendstring=sendstring+'SLW:'+str(GSMlevel)+' '+str(WLANlevel)+'\nSLS:0\n' # status to be added!
 
 
         make_aichannels() # put ai data into buff2server table to be sent to the server - only if successful reading!
