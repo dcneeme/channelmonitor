@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 09.12.2013'  # linux and python3 -compatible
+APVER='channelmonitor_pm.py 12.12.2013'  # linux and python3 -compatible
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -29,7 +29,8 @@ APVER='channelmonitor_pm.py 09.12.2013'  # linux and python3 -compatible
 # 25.11.2013 removed path from logcat dump filename. FULLREBOOT su - s reboot in addition to 666 DEAD
 # 25.11.2013 removed proxy 666 dead usage, kept subexec su - c reboot (impossible  to give the first grant to python if proxy reboot is used as well)
 # 08.12.2013 started modifications for olinuxino and python3.
-# 09.12.2013 udp comm fixed, .encode for python3 str needed. still working with android too.
+# 09.12.2013 udp comm fixed, .encode for python3 str was needed. still working with android too.
+# 12.12.2013 added cmd:logcat,0  to get gzipped logcat report any time
 
 
 # PROBLEMS and TODO
@@ -186,35 +187,9 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
             print(msg)
             log2file(msg)
             time.sleep(10)
-            try:
-                #filename='/sdcard/sl4a/scripts/d4c/'+str(int(ts))+'.log' # file to dump logcat_last
-                filename=str(int(ts))+'.log' # file to dump logcat, without long path
-                returncode=subexec(['/system/bin/logcat','-v','time','-df',filename],0) # creates a log file
-                # if the resulting file exists, pack and push it
-                if returncode == 0:
-                    returncode=push(filename) # gz is created on the way, includes path!
-                    if returncode == 0:
-                        print("file",filename,"successfully pushed")
-                        os.remove(filename+'.gz') # delete the successfully uploaded gz, no unpacked file left
-                    else:
-                        print(" pushing file",filename,"FAILED!")
-                    time.sleep(6)
-                    
-            except:
-                type, value, trace = sys.exc_info()
-                #traceback.print_exc()
-                print(type,value,trace)
-                sys.stdout.flush()
-                time.sleep(3)
-            
-            try:
-                os.rename(filename, 'logcat_last.log') # keep the last log only
-            except:
-                type, value, trace = sys.exc_info()
-                #traceback.print_exc()
-                print(type,value,trace)
-                sys.stdout.flush()
-                time.sleep(3)
+            resultcode=logcat_dumpsend() # trying to dump and push logcat content
+            if resultcode == 0:
+                print('logcat dump successfully sent')
                 
         USBstate=USBnewState
 
@@ -2015,6 +1990,42 @@ def array2regvalue(array,reg,stamax): # for reporting variables in arrays as mes
     output=output+'\n'+reg[:-1]+'S:'+str(status)+'\n'
     return output
 
+    
+    
+def logcat_dumpsend(): # execute logcat dump and push
+    global ts 
+    try:
+        #filename='/sdcard/sl4a/scripts/d4c/'+str(int(ts))+'.log' # file to dump logcat_last
+        filename=str(int(ts))+'.log' # file to dump logcat, without long path
+        returncode=subexec(['/system/bin/logcat','-v','time','-df',filename],0) # creates a log file
+        # if the resulting file exists, pack and push it
+        if returncode == 0:
+            returncode=push(filename) # gz is created on the way, includes path!
+            if returncode == 0:
+                print("file",filename,"successfully pushed")
+                os.remove(filename+'.gz') # delete the successfully uploaded gz, no unpacked file left
+            else:
+                print(" pushing file",filename,"FAILED!")
+            time.sleep(6)
+            
+    except:
+        type, value, trace = sys.exc_info()
+        #traceback.print_exc()
+        print(type,value,trace)
+        sys.stdout.flush()
+        time.sleep(3)
+    
+    try:
+        os.rename(filename, 'logcat_last.log') # keep the last log only
+    except:
+        type, value, trace = sys.exc_info()
+        #traceback.print_exc()
+        print(type,value,trace)
+        sys.stdout.flush()
+        time.sleep(3)
+        
+    return returncode
+    
 
 # ### procedures end ############################################
 
@@ -2748,7 +2759,13 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             if TODO == 'CONFIG': #
                 todocode=channelconfig() # configure modbus registers according to W... data in setup
 
-
+            if TODO == 'LOGCAT': #
+                if OSTYPE == 'android':
+                    todocode=logcat_dumpsend() # configure modbus registers according to W... data in setup
+                else:
+                    TODO="" # esialgu, kuni linuxile midagi aretada
+                    todocode=1
+                    
             if TODO.split(',')[0] == 'pull':
                 print('going to pull') # debug
                 if len(TODO.split(',')) == 3: # download a file (with name and size given)
