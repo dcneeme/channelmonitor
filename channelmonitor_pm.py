@@ -330,20 +330,33 @@ def channelconfig(): # register settings based on setup
                     tcpdata = result.registers[0]
                     if register[0] == 'W': # writable
                         if tcpdata == value: # the actual value verified
-                            msg=msg+' - written and read, verified OK'
+                            msg=msg+' - already OK'
                             print(msg)
                             log2file(msg)
+                            #prepare data for the monitoring server
+                            sendstring=sendstring+"W"+str(mba)+"."+str(regadd)+":"+str(tcpdata)+"\n"  # register content reported as decimal
                         else:
-                            msg=' - unexpected value '+str(tcpdata)+' during verification, register '+str(mba)+'.'+str(regadd)
-                            print(msg)
-                            log2file(msg)
-                            sys.stdout.flush()
-                            time.sleep(0.5)
-                            return 1
+                            msg='CHANGING config wordh '+format("%04x" % value)+' in mba '+str(mba)+' regadd '+str(regadd)
+                            time.sleep(0.1) # successive sending without delay may cause failures!
+                            try:
+                                client.write_register(address=regadd, value=value, unit=mba) # only one regiter to write here
+                                respcode=0 #write_register(mba,regadd,value,0) # write_register sets MBsta[] as well
+                                #prepare data for the monitoring server
+                                sendstring=sendstring+"W"+str(mba)+"."+str(regadd)+":"+str(value)+"\n"  # data just written, not verified! 
+                            except:
+                                respcode=1
+                            
+                            if respcode != 0:
+                                msg=msg+' - write_register() PROBLEM!'
+                                print(msg)
+                                log2file(msg)
+                                #sys.stdout.flush()
+                                time.sleep(1)
+                                #return 1 # continue with others!
                     else: # readable only
                         msg='reading configuration data from mba.reg '+str(mba)+'.'+str(regadd)
-                    #send the actual data to the monitoring server
-                    sendstring=sendstring+"R"+str(mba)+"."+str(regadd)+":"+str(tcpdata)+"\n"  # register content reported as decimal
+                        #send the actual data to the monitoring server
+                        sendstring=sendstring+"R"+str(mba)+"."+str(regadd)+":"+str(tcpdata)+"\n"  # register content reported as decimal
 
                 except: # Exception,err:
                     msg=' - could not read back the register mba.reg '+str(mba)+'.'+str(regadd)
@@ -353,27 +366,7 @@ def channelconfig(): # register settings based on setup
                     time.sleep(1)
                     return 1
 
-                # setup registers read done, now writing if change is needed
-                
-                if row[1] != '': # value to WRITE  must not be empty
-                    value=int(row[1]) # contains 16 bit word
-                    msg='sending config wordh '+format("%04x" % value)+' to mba '+str(mba)+' regadd '+str(regadd)
-                    time.sleep(0.1) # successive sending without delay may cause failures!
-                    try:
-                        client.write_register(address=regadd, value=value, unit=mba) # only one regiter to write here
-                        respcode=0 #write_register(mba,regadd,value,0) # write_register sets MBsta[] as well
-                    except:
-                        respcode=1
-                    #MBsta[mba-1]=respcode
-                    if respcode != 0:
-                        msg=msg+' - write_register() PROBLEM!'
-                        print(msg)
-                        log2file(msg)
-                        #sys.stdout.flush()
-                        time.sleep(1)
-                        #return 1 # continue with others!
-
-                    time.sleep(0.1) # delay needed after write before read!
+                time.sleep(0.1) # delay between registers
 
                     
     udpsend(inumm,int(ts)) # sending to the monitoring server
@@ -386,7 +379,7 @@ def channelconfig(): # register settings based on setup
 
 
 def write_dochannels(): # synchronizes DO bits (output channels) with data in dochannels table, using actual values checking via output records in dichannels table
-    print('write_dochannels start') # debug
+    #print('write_dochannels start') # debug
     # find out which do channels need to be changed based on dichannels and dochannels value differencies
     # and use write_register() write modbus registers (not coils) to get the desired result (all do channels must be also defined as di channels in dichannels table!)
     global inumm,ts,ts_inumm,mac,tcpdata,tcperr #,MBsta
@@ -1616,7 +1609,7 @@ def log2file(msg): # appending a line to the log file
         #print 'could NOT send syslog message to '+repr(logaddr)
         #traceback.print_exc()
 
-    #return 0 # lopetame logimise! ############################ 09.09.2013 # tagasi 27.11.2013
+    return 0 # no logging to linux!!! 
 
     try: # file write
         with open(LOG,"a") as f:
@@ -1777,7 +1770,8 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
 
     try: # commLED on when we try to send, no matter successfully or not
         #client.write_register(address=0, value=256*64, unit=1) # so far there are no other than do7 and do8 in use, MSB!  commLED ON
-        setbit_dochannels(14,1) # bit, value. commLED ON
+        client.write_register(address=114, value=200, unit=1)  # short pulse
+        setbit_dochannels(14,1) # bit, value. commLED ON until got udp
     except:
         msg='failed to light commLED'   # show as one line
         print(msg)
@@ -1889,6 +1883,7 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
         print(msg)
         log2file(msg)
         traceback.print_exc()
+        
     try:
         dnsize=os.stat(filepart)[6]  # int(float(subexec('ls -l '+filename,1).split(' ')[4]))
     except:
@@ -1958,7 +1953,9 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
             print(msg)
             log2file(msg)
 
-
+        if '.py' in filename2 or '.sh' in filename2: # make it executable, only works with gzipped files!
+            st = os.stat('filename2')
+            os.chmod(filename2, st.st_mode | stat.S_IEXEC) # add +x for the owner
         return 0
     else:
         if dnsize<filesize:
@@ -2081,15 +2078,19 @@ def logcat_dumpsend(): # execute logcat dump and push
 
 def setbit_dochannels(bit, value, mba = 1, regadd = 0):  # to get set coil functionality. mba and regadd may be skipped if no extensions in use!
     Cmd="update dochannels set value = '"+str(value)+"' where mba='"+str(mba)+"' and regadd='"+str(regadd)+"' and bit='"+str(bit)+"'"
-    print(Cmd) # debug
+    #print(Cmd) # debug
     try:
         conn3.execute(Cmd)
         conn3.commit()
-        print('output bit',bit,'set to',value,'in table dochannels')
+        msg='output bit '+str(bit)+' set to '+str(value)+' in table dochannels'
+        print(msg)
+        log2file(msg)
         return 0
     except:
-        print('output bit',bit,'setting to',value,'in table dochannels FAILED!')
+        msg='output bit '+str(bit)+' setting to '+str(value)+' in table dochannels FAILED!'
         traceback.print_exc() # debug
+        print(msg)
+        log2file(msg)
         return 1
 
 
@@ -2103,8 +2104,8 @@ def bit_replace(word,bit,value): # changing word with single bit value
     
 
 def getset_network(interface):  # check and change if needed mac and ip
-    #mac_ip=subexec(['/root/d4c/getnetwork',interface],1).decode("utf-8").split(' ') # returns [maci, ip] currently in use  # kuidas param anti??
-    mac_ip=subexec('/root/d4c/getnetwork',1).decode("utf-8").split(' ') # returns [maci, ip] currently in use
+    #mac_ip=subexec(['/root/d4c/getnetwork.sh',interface],1).decode("utf-8").split(' ') # returns [maci, ip] currently in use  # kuidas param anti??
+    mac_ip=subexec('/root/d4c/getnetwork.sh',1).decode("utf-8").split(' ') # returns [maci, ip] currently in use
     conflines = open('/root/d4c/network.conf').read().splitlines()  # read the configuration file to an array of lines
     conf=['','',''] # config file in array of mac,ip,gw
     for line in conflines:
@@ -2117,17 +2118,23 @@ def getset_network(interface):  # check and change if needed mac and ip
                     conf[1]=line.split(' ')[1]
                 if 'defgw' in line[0:5]:
                     conf[2]=line.split(' ')[1]
-    #print('config should be',conf,'is',mac_ip) # debug
+    msg='network config should be '+repr(conf)+', is '+repr(mac_ip) # debug
+    log2file(msg) # debug
     
     if not conf[0] in mac_ip[0] or not conf[1] in mac_ip[1]: # at least one of the parameters invalid
-        print('network setup NOT OK, should be',conf,'is',mac_ip,' - going to change!')
+        msg='network setup NOT OK, should be '+repr(conf)+', is '+repr(mac_ip)+' - going to change!'
+        print(msg)
+        log2file(msg)
         try:
-            subexec('/root/d4c/setnetwork',0) # change the network settings according to the config file /root/d4c/network.conf
+            subexec('/root/d4c/setnetwork.sh',0) # change the network settings according to the config file /root/d4c/network.conf
+            msg='network setup changed to '+repr(mac_ip)
         except:
             print('FAILED  to set network parameters!')
     else:
-        print('network setup OK',mac_ip)
+        msg='network setup OK '+repr(mac_ip)
         
+    print(msg)
+    log2file(msg)
     return conf[0] # the mac that we need, hopefully it really is the same as well
 
 # ### procedures end ############################################
@@ -2149,6 +2156,7 @@ import datetime
 #from pysqlite2 import dbapi2 as sqlite3 # obsolete
 
 import os
+import stat
 import sys
 import traceback
 import subprocess
@@ -2765,7 +2773,9 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 droid.ttsSpeak(msg)
                 time.sleep(10)
 
-        print('last udp received',int(ts - ts_udpgot),'ago') # debug
+        if ts - ts_udpgot > 100: # no udp response 
+            print('last udp received',int(ts - ts_udpgot),'ago') # debug
+            
         if OSTYPE != 'android' and (ts - ts_udpgot > 600):    # no break before 10 min comm loss
             msg=''
             if (ts>ts_gsmbreak+900): # no reset immediately after reset , once in 15 min max
