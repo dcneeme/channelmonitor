@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 12.12.2013'  # linux and python3 -compatible
+APVER='channelmonitor_pm.py 19.12.2013'  # linux and python3 -compatible
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -31,6 +31,9 @@ APVER='channelmonitor_pm.py 12.12.2013'  # linux and python3 -compatible
 # 08.12.2013 started modifications for olinuxino and python3.
 # 09.12.2013 udp comm fixed, .encode for python3 str was needed. still working with android too.
 # 12.12.2013 added cmd:logcat,0  to get gzipped logcat report any time
+# 16.12.2013 do 7 and do8 as commLED and gsm_pwr,  use dochannels for bitwise output control (no need for set coil then). added function setbit_dochannels()
+# 18.12.2013  carrying on with above... dictionaries in write_dochannels()
+# 19.12.2013  carrying on with above... outputs functional for commLED and gsmPWR
 
 
 # PROBLEMS and TODO
@@ -291,7 +294,7 @@ def read_hexstring(mba,regaddr,regcount): # read from modbus register as hex str
 
 
 
-def channelconfig(): # channel setup register setting based on devicetype and channel registers configuration. try to check channel conflicts
+def channelconfig(): # register settings based on setup 
     # assuming the proxy connection is ok, tested before (ProxyState == 0)
     global tcperr,inumm,ts,sendstring #,MBsta # not yet used, add handling
     mba=0
@@ -314,7 +317,7 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
             try:
                 mba=int(register[1:].split('.')[0])
                 regadd=int(register[1:].split('.')[1])
-                msg='going to set or read register '+register+' at mba '+str(mba)+', regadd '+str(regadd)
+                msg='going to read and set (if needed) register '+register+' at mba '+str(mba)+', regadd '+str(regadd)
                 regok=1
             except:
                 msg='invalid mba and/or register data for '+register
@@ -322,26 +325,6 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
             log2file(msg)
 
             if regok == 1:
-                if row[1] != '': # value to WRITE  must not be empty
-                    value=int(row[1]) # contains 16 bit word
-                    msg='sending config wordh '+format("%04x" % value)+' to mba '+str(mba)+' regadd '+str(regadd)
-                    time.sleep(0.1) # successive sending without delay may cause failures!
-                    try:
-                        client.write_register(address=regadd, value=value, unit=mba) # only one regiter to write here
-                        respcode=0 #write_register(mba,regadd,value,0) # write_register sets MBsta[] as well
-                    except:
-                        respcode=1
-                    #MBsta[mba-1]=respcode
-                    if respcode != 0:
-                        msg=msg+' - write_register() PROBLEM!'
-                        print(msg)
-                        log2file(msg)
-                        #sys.stdout.flush()
-                        time.sleep(1)
-                        #return 1 # continue with others!
-
-                    time.sleep(0.1) # delay needed after write before read!
-
                 try:
                     result = client.read_holding_registers(address=regadd, count=1, unit=mba)
                     tcpdata = result.registers[0]
@@ -370,6 +353,29 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
                     time.sleep(1)
                     return 1
 
+                # setup registers read done, now writing if change is needed
+                
+                if row[1] != '': # value to WRITE  must not be empty
+                    value=int(row[1]) # contains 16 bit word
+                    msg='sending config wordh '+format("%04x" % value)+' to mba '+str(mba)+' regadd '+str(regadd)
+                    time.sleep(0.1) # successive sending without delay may cause failures!
+                    try:
+                        client.write_register(address=regadd, value=value, unit=mba) # only one regiter to write here
+                        respcode=0 #write_register(mba,regadd,value,0) # write_register sets MBsta[] as well
+                    except:
+                        respcode=1
+                    #MBsta[mba-1]=respcode
+                    if respcode != 0:
+                        msg=msg+' - write_register() PROBLEM!'
+                        print(msg)
+                        log2file(msg)
+                        #sys.stdout.flush()
+                        time.sleep(1)
+                        #return 1 # continue with others!
+
+                    time.sleep(0.1) # delay needed after write before read!
+
+                    
     udpsend(inumm,int(ts)) # sending to the monitoring server
 
     sys.stdout.flush()
@@ -380,6 +386,7 @@ def channelconfig(): # channel setup register setting based on devicetype and ch
 
 
 def write_dochannels(): # synchronizes DO bits (output channels) with data in dochannels table, using actual values checking via output records in dichannels table
+    print('write_dochannels start') # debug
     # find out which do channels need to be changed based on dichannels and dochannels value differencies
     # and use write_register() write modbus registers (not coils) to get the desired result (all do channels must be also defined as di channels in dichannels table!)
     global inumm,ts,ts_inumm,mac,tcpdata,tcperr #,MBsta
@@ -404,8 +411,8 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
         #mba,regadd,bit,bootvalue,value,rule,desc,comment
 
         # write coils first
-        Cmd3="select dochannels.mba,dochannels.regadd,dochannels.value from dochannels left join dichannels on dochannels.mba = dichannels.mba AND dochannels.regadd = dichannels.regadd AND dochannels.bit = dichannels.bit where dochannels.value != dichannels.value and (dichannels.cfg & 32) group by dochannels.mba,dochannels.regadd "
-        # the command above retrieves mba, regadd and value for coils
+        Cmd3="select dochannels.mba,dochannels.regadd,dochannels.value from dochannels left join dichannels on dochannels.mba = dichannels.mba AND dochannels.regadd = dichannels.regadd AND dochannels.bit = dichannels.bit where dochannels.value != dichannels.value and (dichannels.cfg & 32) group by dochannels.mba,dochannels.regadd " # coils only here, 100..115
+        # the command above retrieves mba, regadd and value for coils where bit values do not match in dichannels and dochannels 
         #print "Cmd3=",Cmd3
         cursor3.execute(Cmd3)
 
@@ -414,13 +421,12 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
             mba=0
 
             if row[0] != '':
-                mba=int(row[0]) # must be anumber
+                mba=int(row[0]) # must be a number
             if row[1] != '':
                 regadd=int(row[1]) # must be a number
             if row[1] != '':
                 value=int(row[2]) # 0 or 1 to be written
             print('going to write as a coil register mba,regadd,value',mba,regadd,value) # temporary
-
 
             try:
                 client.write_register(address=reg, value=value, unit=mba)
@@ -446,62 +452,99 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
     # end coil writing
 
 
-    # write registers now. take values from dichannels and replace the bits found in dochannels. missing bits are zeroes.
-    Cmd3="select dochannels.mba,dochannels.regadd,dochannels.value,dochannels.bit from dochannels left join dichannels on dochannels.mba = dichannels.mba AND dochannels.regadd = dichannels.regadd AND dochannels.bit = dichannels.bit where dochannels.value != dichannels.value and not(dichannels.cfg & 32) group by dochannels.mba,dochannels.regadd,dochannels.bit"
+    # write do register(s?) now. take values from dichannels and replace the bits found in dochannels. missing bits are zeroes.
+    # take powerup values and replace the bit values in dochannels to get the new do word
+    # only write the new word if the bits in dochannel are not equal to the corresponding bits in dichannels
+    Cmd3="select dochannels.mba,dochannels.regadd,dochannels.bit,dochannels.value,dichannels.value from dochannels left join dichannels on dochannels.mba = dichannels.mba AND dochannels.regadd = dichannels.regadd AND dochannels.bit = dichannels.bit where round(dochannels.value) != round(dichannels.value) and not(dichannels.cfg & 32) group by dochannels.mba,dochannels.regadd,dochannels.bit"  # find changes only
+    # without round() 1 != 1.0 !
+    #Cmd3="select dochannels.mba,dochannels.regadd,dochannels.bit,dochannels.value,dichannels.value from dochannels left join dichannels on dochannels.mba = dichannels.mba AND dochannels.regadd = dichannels.regadd AND dochannels.bit = dichannels.bit group by dochannels.mba,dochannels.regadd,dochannels.bit" # mba,reg,bit,dovalue, divalue changed or not
     # the command above retrieves mba, regadd that need to be written as 16 bit register
-    #print "Cmd3=",Cmd3
+    # this solution should work for multiple modbus addresses and different regiosters. first cmd is for write on change only, the second is for debugging, always write!
+    #print(Cmd3)
     try:
         cursor3.execute(Cmd3)
-        conn3.commit()
-
-        for row in cursor3: # got mba, regadd and value for coils that need to be updated / written
+        mba_array=[]
+        mba_dict={} # close to json nested format [mba[reg[bit,ddo,di]]]
+        reg_dict={}
+        bit_dict={}
+        for row in cursor3: # got sorted by mba,regadd,bit values for bits that need to be updated / written
+            tmp_array=[]
+            #print('got something from dochannels-dichannels left join') # debug 
             regadd=0
             mba=0
             bit=0
-            value=0
-
-            if row[0] != '':
-                mba=int(row[0]) # must be anumber
-            if row[1] != '':
-                regadd=int(row[1]) # must be a number
-            if row[2] != '':
-                value=int(row[2]) # 0 or 1 to be written
-            if row[3] != '':
-                bit=int(row[3]) # bit, always 0 for coil, 0..15 for registers
-
-            word=word+2**bit*value # adding bit values up to hget a word from bits 0..15. omitted bit values are 0 in the rsulting word!
-
-            if mba != omba and omba != 0: # next mba, write register using omba now
-                print('going to write a register mba,regadd,value',omba,regadd,word) # temporary
+            di_value=0
+            do_value=0
+            #print('debug cursor3',int(float(row[0])),int(float(row[1])),int(float(row[2])),int(float(row[3])),int(float(row[4]))) # debug 
+            try:
+                mba=int(float(row[0])) # must be number
+                regadd=int(float(row[1])) # must be a number. 0..255
+                bit=(int(float(row[2]))) # bit 0..15
+                tmp_array.append(int(float(row[3])))  # do_value=int(row[3]) # 0 or 1 to be written
+                tmp_array.append(int(float(row[4]))) # di_value=int(row[4]) # 0 or 1 to be written
+                bit_dict.update({bit : tmp_array}) # regadd:[bit,do,di] dict member
+                reg_dict.update({regadd : bit_dict})
+            except:
+                print('failure in creating tmp_array',tmp_array)
+                traceback.print_exc()
+                
+            mba_dict.update({mba : reg_dict})
+            #print('reg_dict',reg_dict,'mba_dict',mba_dict) # debug
+            
+            if mba != omba:  #  and omba != 0: # next mba, write register using omba now!
+                mba_array.append(mba) # mba values in array
+                omba=mba
+                
+        # dictionaries ready, let's process
+        for mba in mba_dict.keys(): # this key is string!
+            print('finding outputs for mba,regadd',mba,regadd)
+            for regadd in reg_dict.keys():
+                if regadd == 0: # for do W272_dict member defines initial state according to mba
+                    try:
+                        word=W272_dict[mba] # power-up value
+                        print('got power up setup for mba',mba,format("%04x" % word)) # debug 
+                    except:
+                        print('power up setup for mba',mba,'NOT SET! chk reg 272')
+                        traceback.print_exc()
+                else:
+                    print('output regadd for mba',regadd,mba) #debug
+                    word = 0 # if not do register
+                
+                print('initial value for output',format("%04x" % word)) # debug
+                
+                for bit in bit_dict.keys():
+                    print('do di bit,[do,di]',bit,bit_dict[bit]) # debug
+                    word2=bit_replace(word,bit,bit_dict[bit][0]) # changed the necessary bit. cannt reuse / change word directly!
+                    word=word2
+                    print('modified word',word)
+                print('going to write a register mba,regadd,with modified word - ',mba,regadd,format("%04x" % word)) # temporary
 
                 try: #
-                    client.write_register(address=reg, value=word, unit=mba)
+                    client.write_register(address=regadd, value=word, unit=mba)
                     respcode=0 # write_register(mba,regadd,word,2*tcpmode)
+                    print('output change done for mba,regadd,value',mba,regadd,format("%04x" % word))
                 except:
+                    print('FAILED writing register',mba,regadd)
+                    traceback.print_exc()
                     respcode=1
 
                 if respcode == 0: # ok
-                    MBerr[locmba]=0
-
+                    MBerr[mba]=0
                 else:
-                    MBerr[locmba]=MBerr[locmba]+1
+                    MBerr[mba]=MBerr[mba]+1
                     print('problem with register',mba,regadd,value,'writing!')
-                    #if respcode == 2: # register writing, gets converted to ff00 if value =1
-                    #    socket_restart() # close and open tcpsocket
-
-
-        #conn3.commit()  # dicannel-bits transaction end
-        return 0
-
+            
+            omba=mba # to detect mba change. valuse in array mbs_array
+                
     except:
         print('problem with dichannel grp select in write_do_channels!')
+        traceback.print_exc() # debug
         sys.stdout.flush()
-        #time.sleep(1)
-        #traceback.print_exc()
+        time.sleep(1)
         return 1
 
-    conn3.commit() # transaction end
-
+    conn3.commit() # transaction end, perhaps not even needed - 2 reads, no writes...
+    return 0
     # write_dochannels() end. FRESHENED DICHANNELS TABLE VALUES AND CGH BITS (0 TO SEND, 1 TO PROCESS)
 
 
@@ -1280,9 +1323,9 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
 
                         if avg>1 and abs(value-ovalue)<value/2:  # averaging the readings. big jumps (more than 50% change) are not averaged.
                             value=int(((avg-1)*ovalue+value)/avg) # averaging with the previous value, works like RC low pass filter
-                            print(', avg on, value',value) # ,'rawdiff',abs(raw-oraw),'raw/2',raw/2
+                            print(', avg on, counter value',value) # ,'rawdiff',abs(raw-oraw),'raw/2',raw/2
                         else:
-                            print(', no avg, value becomes',value)
+                            print(', no avg, counter value becomes',value)
 
 
                         # check limits and set statuses based on that
@@ -1380,7 +1423,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
 
 def report_setup(): # send setup data to server via buff2server table as usual.
     locstring="" # local
-    global inumm,ts,ts_inumm,mac,host,udpport,TODO,sendstring #
+    global inumm,ts,ts_inumm,mac,host,udpport,TODO,sendstring,W272 #
     mba=0 # lokaalne siin
     reg=''
     reg_val=''
@@ -1416,19 +1459,17 @@ def report_setup(): # send setup data to server via buff2server table as usual.
             reg_val=row[1] # string even if number!
             print(' setup variable',val_reg,reg_val)
 
+            if 'W' in val_reg and '272' in val_reg: # power up value for do (setup register W1.272 and so on)
+                W272_dict.update({int(float(val_reg[1])) : int(float(reg_val))}) # {mba:272value}
+                print ('updated W272_dict, became',W272_dict)
+                
             # sending to buffer, no status counterparts! status=''
             Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','','','"+val_reg+"','"+reg_val+"','"+str(int(ts_created))+"','','')"
             # panime puhvertabelisse vastuse ootamiseks. inum ja ts+_tried esialgu tyhi! ja svc_name on reserviks! babup vms... # statust ei kasuta!!
             #print "stp Cmd1=",Cmd1 # temporary debug
             conn1.execute(Cmd1)
 
-            #if OSTYPE == 'linux': # no modbusproxy in use then - change for rpi if needed
-            #    if 'S200' in val_reg: # mac stored temporarely instead of discovery
-            #        oldmac=mac
-            #        mac=reg_val
-            #        print 'controller id set to',mac,', was',oldmac
-
-
+   
         conn1.commit() # buff2server trans lopp
         conn4.commit() # asetup trans lopp
         msg='setup reported at '+str(int(ts))
@@ -1660,7 +1701,7 @@ def udpmessage(): # udp message creation based on  buff2server data, does the re
     # instead of or before deleting the records could be moved to unsent2server table (not existing yet). dumped from there, to be sent later as gzipped sql file
 
     # limit 30 lisatud 19.06.2013
-    Cmd1="SELECT * from buff2server where ts_tried='' or (ts_tried+0>1358756016 and ts_tried+0<"+str(timetoretry)+") AND status+0 != 3 order by ts_created asc limit 30"  # +0 to make it number! use no limit!
+    Cmd1="SELECT * from buff2server where ts_tried='' or (ts_tried+0>1358756016 and ts_tried+0<"+str(ts)+"+0-"+str(timetoretry)+") AND status+0 != 3 order by ts_created asc limit 30"  # +0 to make it number! use no limit / why?
     #print "send Cmd1=",Cmd1 # debug
     try:
         cursor1.execute(Cmd1)
@@ -1704,7 +1745,7 @@ def udpmessage(): # udp message creation based on  buff2server data, does the re
             print(svc_count2,"SERVICE LINES IN BUFFER waiting for ack from monitoring server")
 
     except: # buff2server reading unsuccessful. unlikely...
-        print('problem with buff2serverr read')
+        print('problem with buff2server read')
         traceback.print_exc()
         sys.stdout.flush()
         time.sleep(1)
@@ -1734,7 +1775,16 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
 
     #TCW[1]=TCW[1]+len(sendstring) # adding to the outgoing UDP byte counter
 
-
+    try: # commLED on when we try to send, no matter successfully or not
+        #client.write_register(address=0, value=256*64, unit=1) # so far there are no other than do7 and do8 in use, MSB!  commLED ON
+        setbit_dochannels(14,1) # bit, value. commLED ON
+    except:
+        msg='failed to light commLED'   # show as one line
+        print(msg)
+        log2file(msg)
+        traceback.print_exc()
+        #pass
+        
     try:
         sendlen=UDPSock.sendto(sendstring.encode('utf-8'),saddr) # tagastab saadetud baitide arvu
         TCW[1]=TCW[1]+sendlen # traffic counter udp out
@@ -1745,6 +1795,8 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
         log2file(msg)
         sendstring=''
         ts_udpsent=ts # last successful udp send
+        
+        
     except:
         msg='udp send failure in udpsend() to saddr '+repr(saddr)+', lasting s '+str(int(ts - ts_udpsent))
         log2file(msg)
@@ -2025,7 +2077,58 @@ def logcat_dumpsend(): # execute logcat dump and push
         time.sleep(3)
         
     return returncode
+
+
+def setbit_dochannels(bit, value, mba = 1, regadd = 0):  # to get set coil functionality. mba and regadd may be skipped if no extensions in use!
+    Cmd="update dochannels set value = '"+str(value)+"' where mba='"+str(mba)+"' and regadd='"+str(regadd)+"' and bit='"+str(bit)+"'"
+    print(Cmd) # debug
+    try:
+        conn3.execute(Cmd)
+        conn3.commit()
+        print('output bit',bit,'set to',value,'in table dochannels')
+        return 0
+    except:
+        print('output bit',bit,'setting to',value,'in table dochannels FAILED!')
+        traceback.print_exc() # debug
+        return 1
+
+
+def bit_replace(word,bit,value): # changing word with single bit value
+    #print('word to be modified',format("%04x" % word))#bit_replace(255,0,0) # 254
+    #bit_replace(255,7,0) # 127
+    #bit_replace(0,15,1) # 32k
+    #bit_replace(0,7,1) # 128
+    #print('bit_replace var: ',format("%04x" % word),bit,value,format("%04x" % ((word & (65535 - 2**bit)) + (value<<bit)))) # debug
+    return ((word & (65535 - 2**bit)) + (value<<bit))
     
+
+def getset_network(interface):  # check and change if needed mac and ip
+    #mac_ip=subexec(['/root/d4c/getnetwork',interface],1).decode("utf-8").split(' ') # returns [maci, ip] currently in use  # kuidas param anti??
+    mac_ip=subexec('/root/d4c/getnetwork',1).decode("utf-8").split(' ') # returns [maci, ip] currently in use
+    conflines = open('/root/d4c/network.conf').read().splitlines()  # read the configuration file to an array of lines
+    conf=['','',''] # config file in array of mac,ip,gw
+    for line in conflines:
+        if len(line)>5:
+            if line[0] != '#': # no comments in the beginning
+                #print('conf line',line) # debug
+                if 'mac' in line[0:3]:
+                    conf[0]=line.split(' ')[1].replace(":","") # mac without colons
+                if 'ip ' in line[0:3]:
+                    conf[1]=line.split(' ')[1]
+                if 'defgw' in line[0:5]:
+                    conf[2]=line.split(' ')[1]
+    #print('config should be',conf,'is',mac_ip) # debug
+    
+    if not conf[0] in mac_ip[0] or not conf[1] in mac_ip[1]: # at least one of the parameters invalid
+        print('network setup NOT OK, should be',conf,'is',mac_ip,' - going to change!')
+        try:
+            subexec('/root/d4c/setnetwork',0) # change the network settings according to the config file /root/d4c/network.conf
+        except:
+            print('FAILED  to set network parameters!')
+    else:
+        print('network setup OK',mac_ip)
+        
+    return conf[0] # the mac that we need, hopefully it really is the same as well
 
 # ### procedures end ############################################
 
@@ -2128,7 +2231,8 @@ ts_lastappmain=ts # timestamp for last appmain run
 ts_lastnotify=ts-200 # force sooner reporting after boot
 ts_udpsent=ts # last udp message sent, not received!
 ts_udpgot=ts # udp last received
-# the timestamps above cannot be 0 intially! some will start full reboot!
+ts_gsmbreak=0
+# the timestamps above cannot be 0 initially! some will start full reboot!
 
 mac='000000000000' # initial mac to contact the server in case of no valid setup
 odiword=-1 # previous di word, on startup do not use
@@ -2160,6 +2264,7 @@ BattPlugged=0
 BattHealth=0
 BattCharge=0
 ts_USBrun=0 # timestamp to start running usb
+W272_dict={} # power-on values for modbus slaves. mba:regvalue
 
 #from pymodbus.client.sync import ModbusTcpClient as ModbusClient
 #from pymodbus.client.sync import ModbusSerialClient as ModbusClient
@@ -2207,6 +2312,7 @@ except: # some linux
         
         tcpport=0 # using pyserial
         tcpaddr='' # no modbustcp address given
+        getset_network('ether') # get conf and set mac,ip
     
     else:
         OSTYPE=os.environ['OSTYPE'] #  == 'linux': # running on linux, not android
@@ -2372,9 +2478,10 @@ if stop == 0: # lock ok
         log2file(msg)
         report_setup() # get the mac from setup
         tcperr = 0 # ??
-    else: # linux eth? mac needed
-        mac=subexec('/root/d4c/getmac',1).decode("utf-8")  # find mac and convert byte array to string
-        print('mac',mac)
+    else: # linux eth? mac needed   //  assuming archlinux
+        #mac=subexec('/root/d4c/getmac',1).decode("utf-8")  # find mac and convert byte array to string
+        mac=getset_network('ether') # parameter has no effect currently!
+        print('mac from network configuration',mac)
 
     
     SUPPORTHOST='www.itvilla.ee/support/pyapp/'+mac 
@@ -2447,6 +2554,12 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                     print(msg)
                     log2file(msg)
 
+                    try: # commLED off due to valid ack
+                        #client.write_register(address=0, value=0, unit=1) # so far there are no other than do7 and do8 in use
+                        setbit_dochannels(14,0) # commLED OFF
+                    except:
+                        pass
+                        
                     Cmd="BEGIN IMMEDIATE TRANSACTION" # buff2server, to delete acknowledged rows from the buffer
                     conn1.execute(Cmd) # buff2server ack transactioni algus, loeme ja kustutame saadetud read
 
@@ -2652,6 +2765,23 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 droid.ttsSpeak(msg)
                 time.sleep(10)
 
+        print('last udp received',int(ts - ts_udpgot),'ago') # debug
+        if OSTYPE != 'android' and (ts - ts_udpgot > 600):    # no break before 10 min comm loss
+            msg=''
+            if (ts>ts_gsmbreak+900): # no reset immediately after reset , once in 15 min max
+                #msg='trying gsmPWR break via 1.115 to restore monitoring connectivity'
+                msg='starting gsmbreak via 1.0.15 to restore monitoring connectivity'
+                setbit_dochannels(15,0) # break start. optionally mba readd can be set to something else than 1 0 by default!
+                ts_gsmbreak = ts
+                #client.write_register(address=115, value=5000, unit=1)  # pulse to gsmPWR, will be canceled by di/do sync!
+            else: # return from 5 s break state
+                if (ts>ts_gsmbreak+5): # return from gsmbreak
+                    msg='ending gsmPWR break'
+                    setbit_dochannels(15,1) # break end
+            if len(msg)>0:
+                log2file(msg) # log message to file
+                print(msg)
+        
         if ts - ts_udpgot > 1800: # for 30 min no response from udpserver
             TODO='FULLREBOOT' # try if it helps. if send fails, after 300 s also full reboot
             msg='trying full reboot to restore monitoring connectivity'
@@ -2660,7 +2790,6 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             if OSTYPE == 'android':
                 droid.ttsSpeak(msg)
                 time.sleep(10)
-
 
 
         if TODO != '': # yes, it seems there is something to do
@@ -3033,9 +3162,6 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     # ### NOW the ai and counter values, to be reported once in 30 s or so
     if ts>appdelay+ts_lastappmain:  # time to read analogue registers and counters, not too often
         # this is the appmain part below
-        msg='appmain start at '+str(int(ts))+', time to renotify prg var '+str(int(ts-ts_lastnotify))+', syslog to '+loghost
-        #print(msg)
-        #log2file(msg) # debug
         ts_lastappmain=ts # remember the execution time
 
         # signal levels to send. measured once in 5s if android
@@ -3074,6 +3200,9 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 if OSTYPE == 'android':
                     droid.ttsSpeak(msg)
 
+        if OSTYPE == 'archlinux':
+            getset_network('ether') # chk and chg network parameters
+        
         # ############################################################ temporary check to debug di part here, not as often as normally
         #read_dichannel_bits() # di read as bitmaps from registers. use together with the make_dichannel_svc()!
         #make_dichannel_svc() # di related service messages creation, insert message data into buff2server to be sent to the server

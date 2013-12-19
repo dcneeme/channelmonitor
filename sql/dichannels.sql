@@ -26,6 +26,11 @@ CREATE TABLE dichannels(mba,regadd,bit,val_reg,member,cfg,block,value,status,ts_
 -- if newvalue is different from value, write will happen. do not enter newvalues for read only register related rows.
 -- type is for category flagging, 0=do, 1 = di, 2=ai, 3=ti. use only 0 and 1 in this table
 
+-- controlled outputs, following dochannels bit values
+INSERT INTO "dichannels" VALUES('1','0','14','DXW','1','0','0','0','1','0','','','mba1 D07','',0); -- commLED. hakatakse ka raporteerima kahjuks...
+INSERT INTO "dichannels" VALUES('1','0','15','DXW','2','0','0','0','1','1','','','mba1 DO8','',0); -- gsmPWR
+
+
 --AI as di channels (1..4 are ai)
 INSERT INTO "dichannels" VALUES('1','1','6','R1W','1','21','0','0','1','0','','','ai7 as di','R1W',1); -- pingega p1 on, adi7. w.
 INSERT INTO "dichannels" VALUES('1','1','7','R1W','2','21','0','0','1','0','','','ai8 as di','R1W',1); -- p1 on, adi8

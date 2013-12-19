@@ -4,7 +4,7 @@
 
 PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
-CREATE TABLE dochannels(mba,regadd,bit,bootvalue,value,rule,desc,comment); -- one line per register bit (coil). 15 columns
+CREATE TABLE dochannels(mba,regadd,bit,bootvalue,value,rule,desc,comment); -- one line per register bit (coil). 15 columns.  NO ts???
 
 -- regvalue is read from register, value is the one we want the register to be (written by app). write value to register to make regvalue equal!
 -- if the value is empty / None, then no control will be done, just reading the register
@@ -12,8 +12,10 @@ CREATE TABLE dochannels(mba,regadd,bit,bootvalue,value,rule,desc,comment); -- on
 -- it is possible to combine values from different modbus slaves and registers into one service. 
 -- possible status values are 0..3
 
-INSERT INTO "dochannels" VALUES('1','0','0','0','0','','output DO1','do 1'); 
-INSERT INTO "dochannels" VALUES('1','0','1','0','0','','output DO2','do 2'); 
+-- INSERT INTO "dochannels" VALUES('1','0','0','0','0','','output ADO1','do 1'); 
+-- INSERT INTO "dochannels" VALUES('1','0','1','0','0','','output ADO2','do 2'); 
+INSERT INTO "dochannels" VALUES('1','0','14','1','1','','output DO7','commLED'); 
+INSERT INTO "dochannels" VALUES('1','0','15','1','1','','output DO8','gsmPWR'); 
 
 CREATE UNIQUE INDEX do_mbaregbit on 'dochannels'(mba,regadd,bit); -- you need to put a name to the channel even if you do not plan to report it
 
