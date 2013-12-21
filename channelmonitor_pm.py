@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 19.12.2013'  # linux and python3 -compatible
+APVER='channelmonitor_pm.py 20.12.2013'  # linux and python3 -compatible
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -34,6 +34,7 @@ APVER='channelmonitor_pm.py 19.12.2013'  # linux and python3 -compatible
 # 16.12.2013 do 7 and do8 as commLED and gsm_pwr,  use dochannels for bitwise output control (no need for set coil then). added function setbit_dochannels()
 # 18.12.2013  carrying on with above... dictionaries in write_dochannels()
 # 19.12.2013  carrying on with above... outputs functional for commLED and gsmPWR
+# 20.12.2013 have put sql tables into memory. problem with setup chg & dump!
 
 
 # PROBLEMS and TODO
@@ -107,7 +108,7 @@ def sqlread(table): # drops table and reads from file table.sql that must exist
     try:
         sql = open(filename).read()
     except:
-        msg='sqlreload: could not find sql file '+filename
+        msg='sqlread: could not find sql file '+filename
         print(msg)
         log2file(msg)
         traceback.print_exc()
@@ -118,19 +119,23 @@ def sqlread(table): # drops table and reads from file table.sql that must exist
         if table in conn1tables:
             conn1.execute(Cmd) # drop the table if it exists
             conn1.executescript(sql) # read table into database
+            conn1.commit()
         if table in conn3tables:
             conn3.execute(Cmd)
             conn3.executescript(sql) # read table into database
+            conn3.commit()
         if table in conn4tables:
             conn4.execute(Cmd)
             conn4.executescript(sql) # read table into database
-        msg='sqlreload: successfully dropped and read the table '+table
+            conn4.commit()
+        msg='sqlread: successfully dropped and read the table '+table
         print(msg)
         log2file(msg)
+        time.sleep(0.5)
         return 0
     except:
         traceback.print_exc()
-        msg='sqlreload: COULD NOT drop table '+table
+        msg='sqlread: COULD NOT drop or read sql for table '+table
         print(msg)
         log2file(msg)
         time.sleep(1)
@@ -1416,7 +1421,7 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
 
 def report_setup(): # send setup data to server via buff2server table as usual.
     locstring="" # local
-    global inumm,ts,ts_inumm,mac,host,udpport,TODO,sendstring,W272 #
+    global inumm,ts,ts_inumm,mac,host,udpport,TODO,sendstring,W272_dict 
     mba=0 # lokaalne siin
     reg=''
     reg_val=''
@@ -1430,16 +1435,13 @@ def report_setup(): # send setup data to server via buff2server table as usual.
     udpsend(inumm,int(ts)) # sending to the monitoring server
 
     try:
-        Cmd4="BEGIN IMMEDIATE TRANSACTION" # conn4 asetup
-        conn4.execute(Cmd4)
+        #Cmd4="BEGIN IMMEDIATE TRANSACTION" # conn4 asetup
+        #conn4.execute(Cmd4)
         Cmd1="BEGIN IMMEDIATE TRANSACTION" # conn1 buff2server
         conn1.execute(Cmd1)
 
-        if mac == '000000000000': # no valid controller id value yet, startup phase! read from modbusproxy. what if inaccessible? then backup from setup S200.
-            Cmd4="select register,value from setup where register='S200'" # find out ONLY the correct first, avoid reporting anything else with wrong mac!
-        else:
-            Cmd4="select register,value from setup" # no multimember registers for setup!
-        #print Cmd4 # temporary
+        Cmd4="select register,value from setup" # no multimember registers for setup!
+        print(Cmd4) # temporary
         cursor4.execute(Cmd4)
 
         for row in cursor4: #
@@ -1450,7 +1452,7 @@ def report_setup(): # send setup data to server via buff2server table as usual.
 
             val_reg=row[0] # muutuja  nimi
             reg_val=row[1] # string even if number!
-            print(' setup variable',val_reg,reg_val)
+            print(' setup row: ',val_reg,reg_val)
 
             if 'W' in val_reg and '272' in val_reg: # power up value for do (setup register W1.272 and so on)
                 W272_dict.update({int(float(val_reg[1])) : int(float(reg_val))}) # {mba:272value}
@@ -1475,11 +1477,8 @@ def report_setup(): # send setup data to server via buff2server table as usual.
     except: # setup reading  problem
         print('problem with setup reading',Cmd4)
         traceback.print_exc()
-        sys.stdout.flush()
         msg='setup reporting failure (setup reading problem) at '+str(int(ts))
-        print(msg)
         log2file(msg) # log message to file
-        sys.stdout.flush()
         time.sleep(1)
         return 1
 
@@ -2123,8 +2122,8 @@ def getset_network(interface):  # check and change if needed mac and ip
     
     if not conf[0] in mac_ip[0] or not conf[1] in mac_ip[1]: # at least one of the parameters invalid
         msg='network setup NOT OK, should be '+repr(conf)+', is '+repr(mac_ip)+' - going to change!'
-        print(msg)
-        log2file(msg)
+        #print(msg)
+        #log2file(msg)
         try:
             subexec('/root/d4c/setnetwork.sh',0) # change the network settings according to the config file /root/d4c/network.conf
             msg='network setup changed to '+repr(mac_ip)
@@ -2137,6 +2136,31 @@ def getset_network(interface):  # check and change if needed mac and ip
     log2file(msg)
     return conf[0] # the mac that we need, hopefully it really is the same as well
 
+    
+    
+def change_setup(register,value):  # iga muutus omaette transaktsioonina
+    global ts
+    print('setup change started for',sregister,svalue,', setup_change so far',setup_change)
+    sCmd="BEGIN IMMEDIATE TRANSACTION" # setup table. there may be no setup changes, no need for empty transactions
+    try:
+        conn4.execute(sCmd) # setup transaction start
+        sCmd="update setup set value='"+str(svalue)+"', ts='"+str(int(ts))+"' where register='"+sregister+"'" # update only, no insert here!
+        print(sCmd)
+        log2file(sCmd) # debug
+        conn4.execute(sCmd) # table asetup/setup
+        conn4.commit() # end transaction
+        print('setup change done for',sregister,svalue)
+        return 0
+    except: #if not succcessful, then not a valid setup message
+        msg='setup change problem, possibly the assumed setup register '+sregister+' not found in setup table!'
+        print(msg)
+        log2file(msg)
+        traceback.print_exc() # temporary debug only
+        sys.stdout.flush()
+        time.sleep(1)
+        return 1
+        
+        
 # ### procedures end ############################################
 
 
@@ -2408,10 +2432,17 @@ if stop == 0: # lock ok
 
     #create sqlite connections (while located in sql_dir)
     try:
-        conn1 = sqlite3.connect('./buff2server',2) # buffer data from modbus registers, unsent or to be resent
-        conn3 = sqlite3.connect('./modbus_channels',2) # modbus register related tables / sometimes locked!!
-        conn4 = sqlite3.connect('./asetup',2) # setup table, only for update, NO INSERT! 2 s timeout. timeout will cause exexution stop.
-
+        conn1 = sqlite3.connect(':memory:')  # conn1 = sqlite3.connect('./buff2server',2) # buffer data from modbus registers, unsent or to be resent
+        conn3 = sqlite3.connect(':memory:')  # sqlite3.connect('./modbus_channels',2) # modbus register related tables / sometimes locked!!
+        conn4 = sqlite3.connect(':memory:')  # sqlite3.connect('./asetup',2) # setup table, only for update, NO INSERT! 2 s timeout. timeout will cause exexution stop.
+        #conn4 = sqlite3_open("file::memory:?cache=shared", &db) # testime kas nii on parem
+        #create tables from sql files
+        for table in conn1tables:
+            sqlread(table)
+        for table in conn3tables:
+            sqlread(table)
+        for table in conn4tables:
+            sqlread(table)
     except:
         msg=='sqlite connection problem' # should be reported using backdoor connection
         print(msg)
@@ -2421,14 +2452,21 @@ if stop == 0: # lock ok
         time.sleep(3)
 
     #conn.execute("PRAGMA journal_mode=wal")  # to speed up
-    conn1.execute("PRAGMA synchronous=OFF")  #
-    conn3.execute("PRAGMA synchronous=OFF")  #
+    #conn1.execute("PRAGMA synchronous=OFF")  # only important files files?
+    #conn3.execute("PRAGMA synchronous=OFF")
+    #conn4.execute("PRAGMA synchronous=OFF")    #
     cursor1=conn1.cursor() # cursors to read data from tables
-    #cursor2=conn2.cursor()
+    #cursor2=conn2.cursor() # not in use, sent2server
     cursor3=conn3.cursor()
     cursor3a=conn3.cursor() # the second cursor for the same connection
     cursor4=conn4.cursor()
-
+    
+    # test if table setup is preset 
+    Cmd='select * from setup'
+    print(Cmd)
+    cursor4.execute(Cmd)
+    for row in cursor4:
+        print(repr(row))
 
     # delete unsent rows older than 60 s
     Cmd1="DELETE from buff2server where ts_created+0<"+str(ts)+"-60" # kustutakse koik varem kui ninute tagasi loodud
@@ -2484,7 +2522,7 @@ if stop == 0: # lock ok
 
         print(msg)
         log2file(msg)
-        report_setup() # get the mac from setup
+        #report_setup() # get the mac from setup - not from setup!
         tcperr = 0 # ??
     else: # linux eth? mac needed   //  assuming archlinux
         #mac=subexec('/root/d4c/getmac',1).decode("utf-8")  # find mac and convert byte array to string
@@ -2502,7 +2540,7 @@ if stop == 0: # lock ok
     sys.stdout.flush()
     time.sleep(1)
 
-    print('reporting setup again') # must be done twice, the second can be more successful with connection and mac known (tmp hack)
+    print('reporting setup') # must be done twice, the second can be more successful with connection and mac known (tmp hack)
     report_setup() # sending some data from asetup/setup to server on startup
     report_channelconfig() # sending some data from modbuschannels/*channels to server on startup
     msg='starting the main loop' #  at '+str(int(ts))+'. mac '+mac+', saddr '+str(repr(saddr))+', modbusproxy '+tcpaddr+':'+str(tcpport)
@@ -2520,7 +2558,6 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
     data='' # avoid old data to be processed again
 
     try: # if anything comes into udp buffer in 0.1s
-        setup_change=0 # flag to detect possible setup changes
         rdata,raddr = UDPSock.recvfrom(buf)
         data=rdata.decode("utf-8") # python3 related need due to mac in hex
         
@@ -2633,30 +2670,11 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                         time.sleep(1)
 
 
-                    #print 'testing sent2server now'
-                    #Cmd2="SELECT count(inum) from sent2server WHERE mac='"+id+"' and inum='"+str(inum)+"' and ts_ack+0>"+str(int(ts-30)) # search from recently added rows
-                    #print Cmd2 # temporary
-                    #try:
-                        #cursor2.execute(Cmd2) # sent2server tabelisse edukalt saadetud teenuseridade lisamine.
-                        #conn2.commit()
-                        #for row in cursor2: # should be one row only
-                            #if row[0]>0:
-                                #print row[0],"rows with inum ",inum,"successfully added into sent2server"
-                            #else:
-                                #print 'ERROR: no lines with inum',inum,'saved into sent2server!'
-                    #except:
-                        #print "trouble with",Cmd2
-                        #traceback.print_exc()
-                    # check end
-
-
-
-            # from now on we do not care if in: was or was not in the receved datagram
-
             # #### possible SETUP information contained in received from server message? ########
             # no insert into setup, only update allowed!
             lines=data.splitlines() # all members as pieces again
 
+            setup_change=0 # flag to detect possible setup changes
             for i in range(len(lines)): # looking into every member of incoming message
                 if ":" in lines[i]:
                     #print "   "+lines[i]
@@ -2672,35 +2690,13 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                         time.sleep(0.1)
                         if sregister != 'cmd': # can be variables to be saved into setup table or to be restored. do not accept any setup values that are not in there already!
                             if sregister[0] == 'W' or sregister[0] == 'B' or sregister[0] == 'S': # could be setup variable
-                                print('need for setup change detected due to received',sregister,svalue,', setup_change so far',setup_change)
-                                if setup_change == 0: # first setup variable in the message found (there can be several)
-                                    setup_change=1 # flag it
-                                    sCmd="BEGIN IMMEDIATE TRANSACTION" # setup table. there may be no setup changes, no need for empty transactions
-                                    try:
-                                        conn4.execute(sCmd) # setup transaction start
-                                        print('transaction for setup change started')
-                                    except:
-                                        print('setup change problem')
-                                        traceback.print_exc()
-                                        sys.stdout.flush()
-                                        time.sleep(1)
-
-
-                                else: # already started
-                                    print('setup_change continues') # debug
-
-
-                                sCmd="update setup set value='"+str(svalue)+"', ts='"+str(int(ts))+"' where register='"+sregister+"'" # update only, no insert here!
-                                print(sCmd) # debug
-                                try: #
-                                    conn4.execute(sCmd) # table asetup/setup
-                                    print('setup change done',sregister,svalue)
-                                except: #if not succcessful, then not a valid setup message
-                                    print('assumed setup register',sregister,'not found in setup table! value',svalue,'ignored!')
-                                    traceback.print_exc() # temporary debug only
-                                    sys.stdout.flush()
-                                    time.sleep(1)
-                            else: # did not begin with W B S, some program variable to be rrestored?
+                                if change_setup(sregister,svalue) == 0: # successful change in memory, not in file yet!
+                                    setup_change = 1 # flag the change
+                                    msg='setup changed, '+sregister+svalue
+                                    print(msg)
+                                    log2file(msg)
+                                    
+                            else: # sregister did not begin with W B S, some program variable to be restored?
                                 if sregister == 'TCW': # traffic volumes to be restored
                                     if len(svalue.split(' ')) == 4: # member count for traffic: udpin, udpout, tcpin, tcpout in bytes
                                         for member in range(len(svalue.split(' '))): # 0 1 2 3
@@ -2740,17 +2736,23 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                     if sendstring != '':
                         udpsend(0,int(ts))  # send back the ack for commands. this adds in and id always. no need for server ack, thus 0 instead of inumm
 
-            if setup_change == 1: #there were some changes done  to setup
-                conn4.commit() # transaction end for setup change. what if no changes were needed?
+            if setup_change == 1: #there were some changes done  to setup, dump setup.sql!
                 setup_change=0 #back to normal
-                if TODO == '':
-                    TODO='VARLIST' # let's report setup without asking if setup was changed
-                else: # not empty, something still not done?
-                    print('could not set TODO to VARLIST, was not empty:',TODO)
-
-            #####
-
-
+                # dump asetup/setup setup into setup.sql  ####
+                msg='going to dump setup into setup.sql'
+                try:
+                    with open('setup.sql', 'w') as f:
+                        for line in conn4.iterdump(): # only one table, setup connected 
+                            f.write('%s\n' % line)
+                except:
+                    msg='FAILURE dumping setup into setup.sql'
+                    traceback.print_exc()
+                    
+                print(msg)
+                log2file(msg)
+                
+                TODO='VARLIST' # let's report the whole setup just in case due to change. not really needed.
+                
         else: # illegal udp msg
             msg="got illegal message (no id) from "+str(addr)+" at "+str(int(ts))+": "+data.replace('\n',' ')  # missing mac
             print(msg)
