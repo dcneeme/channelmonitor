@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 21.12.2013'  # linux and python3 -compatible
+APVER='channelmonitor_pm.py 23.12.2013'  # linux and python3 -compatible
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -37,7 +37,8 @@ APVER='channelmonitor_pm.py 21.12.2013'  # linux and python3 -compatible
 # 20.12.2013 have put sql tables into memory. problem with setup chg & dump!
 # 21.12.2013 setup dump ok. outputs ok. use usbpower delay 100 for linux. make sure the files setnetwork.sh, network.conf, getnetwork.sh are in d4c directory for archlinux.
 # 22.12.2013 syslog server address controlled by S514 now in setup.sql.
- 
+# 23.12.2013 android and linux behavior differ related to di/do sync!
+# 24.12.2013 fixed output flapping behavior after gsmbreak, add bit changes one after another. use previous output not the powerup value. fixed channelconfig().
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -322,11 +323,13 @@ def channelconfig(): # register settings read, write to slaves if needed, report
             print(msg)
             syslog(msg)
             register=row[0] # contains W<mba>.<regadd> or R<mba>.<regadd>
+            # do not read value here, can be string as well
+                
             if '.' in register: # dot is needed
                 try:
                     mba=int(register[1:].split('.')[0])
                     regadd=int(register[1:].split('.')[1])
-                    msg='going to read and set (if needed) register '+register+' at mba '+str(mba)+', regadd '+str(regadd)
+                    msg='going to read and set (if needed) register '+register+' at mba '+str(mba)+', regadd '+str(regadd)+' to '+format("%04x" % value)
                     regok=1
                 except:
                     msg='invalid mba and/or register data for '+register
@@ -335,17 +338,25 @@ def channelconfig(): # register settings read, write to slaves if needed, report
 
                 if regok == 1:
                     try:
-                        result = client.read_holding_registers(address=regadd, count=1, unit=mba)
+                        if row[1] != '':
+                            value=int(float(row[1])) # setup value from setup table
+                        else:
+                            msg='empty value for register '+register+', assuming 0!'
+                            value=0
+                            print(msg)
+                            syslog(msg)
+                        
+                        result = client.read_holding_registers(address=regadd, count=1, unit=mba) # actual value currently in slave modbus register
                         tcpdata = result.registers[0]
                         if register[0] == 'W': # writable
                             if tcpdata == value: # the actual value verified
-                                msg=msg+' - already OK'
+                                msg=msg+' - setup register value already OK, '+str(value)
                                 print(msg)
                                 syslog(msg)
                                 #prepare data for the monitoring server
                                 #sendstring=sendstring+"W"+str(mba)+"."+str(regadd)+":"+str(tcpdata)+"\n"  # register content reported as decimal
                             else:
-                                msg='CHANGING config wordh '+format("%04x" % value)+' in mba '+str(mba)+' regadd '+str(regadd)
+                                msg='CHANGING config in mba '+str(mba)+' regadd '+str(regadd)+' from '+format("%04x" % tcpdata)+' to '+format("%04x" % value)
                                 time.sleep(0.1) # successive sending without delay may cause failures!
                                 try:
                                     client.write_register(address=regadd, value=value, unit=mba) # only one regiter to write here
@@ -353,17 +364,21 @@ def channelconfig(): # register settings read, write to slaves if needed, report
                                     #prepare data for the monitoring server = NOT HERE!
                                     #sendstring=sendstring+"W"+str(mba)+"."+str(regadd)+":"+str(value)+"\n"  # data just written, not verified! 
                                 except:
+                                    traceback.print_exc()
                                     respcode=1
                                 
                                 if respcode != 0:
                                     msg=msg+' - write_register() PROBLEM!'
-                                    print(msg)
-                                    syslog(msg)
-                                    #sys.stdout.flush()
                                     time.sleep(1)
                                     #return 1 # continue with others!
+                            print(msg)
+                            syslog(msg)
+                            #sys.stdout.flush()
+
                         else: # readable only
                             msg='updating setup with read-only configuration data from mba.reg '+str(mba)+'.'+str(regadd)
+                            print(msg)
+                            syslog(msg)
                             Cmd4="update setup set value='"+str(tcpdata)+"' where register='"+register+"'"
                             conn4.execute(Cmd4)
                             #send the actual data to the monitoring server
@@ -484,7 +499,7 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
             bit=0
             di_value=0
             do_value=0
-            #print('debug cursor3',int(float(row[0])),int(float(row[1])),int(float(row[2])),int(float(row[3])),int(float(row[4]))) # debug 
+            syslog('change in output needed for mba,regadd,bit '+str(int(float(row[0])))+", "+str(int(float(row[1])))+", "+str(int(float(row[2])))+' from value '+str(int(float(row[4])))+' to '+str(int(float(row[3]))))
             try:
                 mba=int(float(row[0])) # must be number
                 regadd=int(float(row[1])) # must be a number. 0..255
@@ -507,27 +522,31 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
         # dictionaries ready, let's process
         for mba in mba_dict.keys(): # this key is string!
             print('finding outputs for mba,regadd',mba,regadd)
-            for regadd in reg_dict.keys():
-                if regadd == 0: # for do W272_dict member defines initial state according to mba
-                    try:
-                        word=W272_dict[mba] # power-up value
-                        #print('power up setup for mba',mba,format("%04x" % word)) # debug 
-                    except:
-                        msg='power up state for mba '+str(mba)+' NOT SET! chk reg 272'
-                        syslog(msg)
-                        print(msg)
-                        traceback.print_exc()
-                else:
-                    #print('output regadd for mba',regadd,mba) #debug
-                    word = 0 # not DO register
+            for regadd in reg_dict.keys(): # chk all output registers defined in dochannels table
                 
-                #print('initial value for output',format("%04x" % word)) # debug
+                word=client.read_holding_registers(address=regadd, count=1, unit=mba).registers[0] # find the current output word to inject the bitwise changes
+                
+                #if regadd == 0: # for do W272_dict member defines initial state according to mba
+                #    try:
+                #        word=W272_dict[mba] # power-up value
+                #        #print('power up setup for mba',mba,format("%04x" % word)) # debug 
+                #    except:
+                #        msg='power up state for mba '+str(mba)+' NOT SET! chk reg 272'
+                #        syslog(msg)
+                #        print(msg)
+                #        traceback.print_exc()
+                #else:
+                #    #print('output regadd for mba',regadd,mba) #debug
+                #    word = 0 # not DO register
+                # 
+                
+                print('value of the output',mba,regadd,'before change',format("%04x" % word)) # debug
                 
                 for bit in bit_dict.keys():
                     print('do di bit,[do,di]',bit,bit_dict[bit]) # debug
-                    word2=bit_replace(word,bit,bit_dict[bit][0]) # changed the necessary bit. cannt reuse / change word directly!
+                    word2=bit_replace(word,bit,bit_dict[bit][0]) # changed the necessary bit. can't reuse / change word directly!
                     word=word2
-                    #print('modified word',word) # debug
+                    syslog('modified by bit '+str(bit)+' value '+str(bit_dict[bit][0])+' word '+format("%04x" % word)) # debug
                 #print('going to write a register mba,regadd,with modified word - ',mba,regadd,format("%04x" % word)) # temporary
 
                 try: #
@@ -692,7 +711,7 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                             status=3 # not to be sent status=3! or send member as NaN?
 
                         print(msg) # temporarely off
-                        syslog(msg)
+                        #syslog(msg)
 
                     except: # else: # failed reading register, respcode>0
                         if mba<5:
@@ -983,11 +1002,11 @@ def read_dichannel_bits(mba): # binary inputs, bit changes to be found and value
                     if value != ovalue: # change detected, update dichannels value, chg-flag  - saaks ka maski alusel!!!
                         chg=3 # 2-bit change flag, bit 0 to send and bit 1 to process, to be reset separately
                         #ichg=ichg+2**bit # adding up into the change mask
-                        msg='DIchannel '+str(mba)+'.'+str(regadd)+' bit '+str(bit)+' change! was '+str(ovalue)+', became '+str(value) # temporary
+                        msg='DIchannel '+str(mba)+'.'+str(regadd)+' bit '+str(bit)+' change! was '+str(ovalue)+', became '+str(round(value)) # temporary
                         print(msg)
                         syslog(msg)
                         # dichannels table update with new bit values and change flags. no status change here. no update if not changed!
-                        Cmd3="UPDATE dichannels set value='"+str(value)+"', chg='"+str(chg)+"', ts_chg='"+str(int(ts))+"' where mba='"+str(mba)+"' and regadd='"+str(regadd)+"' and bit='"+str(bit)+"'" # uus bit value ja chg lipp, 2 BITTI!
+                        Cmd3="UPDATE dichannels set value='"+str(round(value))+"', chg='"+str(chg)+"', ts_chg='"+str(int(ts))+"' where mba='"+str(mba)+"' and regadd='"+str(regadd)+"' and bit='"+str(bit)+"'" # uus bit value ja chg lipp, 2 BITTI!
                     else: # ts_chg used as ts_read now! change detection does not need that  timestamp!
                         Cmd3="UPDATE dichannels set ts_chg='"+str(int(ts))+"' where mba='"+str(mba)+"' and regadd='"+str(regadd)+"' and bit='"+str(bit)+"'" # old value unchanged, use ts_CHG AS TS!
                     #print Cmd3 # debug
@@ -1119,7 +1138,7 @@ def make_dichannel_svc(val_reg,sta_reg,chg):    # ONE service compiling and buff
             member=int(srow[4])
         if srow[5] != '':
             cfg=int(srow[5]) # configuration byte
-        # block?? to p[revent sending service with errors. to be added!
+        # block?? to prevent sending service with errors. to be added!
         if srow[7] != '':
             value=int(float(srow[7])) # new value
         if srow[8] != '':
@@ -1457,7 +1476,7 @@ def report_setup(): # send setup data to server via buff2server table as usual.
         conn1.execute(Cmd1)
 
         Cmd4="select register,value from setup" # no multimember registers for setup!
-        print(Cmd4) # temporary
+        #print(Cmd4) # temporary
         cursor4.execute(Cmd4)
 
         for row in cursor4: #
@@ -1483,7 +1502,13 @@ def report_setup(): # send setup data to server via buff2server table as usual.
                 print(msg)
                 syslog(msg)
                 logaddr=(loghost,logport) # global variable change
-                
+                if OSTYPE == 'archlinux':  # change the linux syslog destination address too
+                    if subexec(['/etc/syslog-ng/changedest.sh',loghost],0) == 0:
+                        msg='linux syslog redirected to '+loghost
+                    else:
+                        msg='linux syslog redirection to '+loghost+' FAILED!'
+                    syslog(msg)
+                    print(msg)
             # sending to buffer, no status counterparts! status=''
             Cmd1="INSERT into buff2server values('"+mac+"','"+host+"','"+str(udpport)+"','"+svc_name+"','','','"+val_reg+"','"+reg_val+"','"+str(int(ts_created))+"','','')"
             # panime puhvertabelisse vastuse ootamiseks. inum ja ts+_tried esialgu tyhi! ja svc_name on reserviks! babup vms... # statust ei kasuta!!
@@ -1627,7 +1652,7 @@ def syslog(msg): # appending a line to the log file
     #rotation should be added if the file becomes too big
     global LOG, ts, logaddr
     msg=msg+"\n" # add newline to the end
-    print('syslog send to',logaddr) # debug
+    #print('syslog send to',logaddr) # debug
     
     try: # syslog first
         UDPlogSock.sendto(msg.encode('utf-8'),logaddr)
@@ -1797,7 +1822,7 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
 
     try: # commLED on when we try to send, no matter successfully or not
         #client.write_register(address=0, value=256*64, unit=1) # so far there are no other than do7 and do8 in use, MSB!  commLED ON
-        client.write_register(address=114, value=200, unit=1)  # short pulse
+        client.write_register(address=114, value=100, unit=1)  # short pulse
         setbit_dochannels(14,1) # bit, value. commLED ON until got udp
     except:
         msg='failed to light commLED'   # show as one line
@@ -2325,6 +2350,7 @@ BattHealth=0
 BattCharge=0
 ts_USBrun=0 # timestamp to start running usb
 W272_dict={} # power-on values for modbus slaves. mba:regvalue
+gsmbreak=0 # 1 if powerbreak ongoing, do bit 15
 
 #from pymodbus.client.sync import ModbusTcpClient as ModbusClient
 #from pymodbus.client.sync import ModbusSerialClient as ModbusClient
@@ -2813,17 +2839,19 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
         if ts - ts_udpgot > 100: # no udp response 
             print('last udp received',int(ts - ts_udpgot),'ago') # debug
             
-        if OSTYPE != 'android' and (ts - ts_udpgot > 600):    # no break before 10 min comm loss
+        if OSTYPE != 'android' and (ts - ts_udpgot > 600):    # no break before 10 min comm loss #  > 600
             msg=''
-            if (ts>ts_gsmbreak+900): # no reset immediately after reset , once in 15 min max
+            if (ts>ts_gsmbreak+900): # no reset immediately after reset , once in 15 min max # 900 normal
                 #msg='trying gsmPWR break via 1.115 to restore monitoring connectivity'
                 msg='starting gsmbreak via 1.0.15 to restore monitoring connectivity'
                 setbit_dochannels(15,0) # break start. optionally mba readd can be set to something else than 1 0 by default!
+                gsmbreak=1
                 ts_gsmbreak = ts
                 #client.write_register(address=115, value=5000, unit=1)  # pulse to gsmPWR, will be canceled by di/do sync!
             else: # return from 5 s break state
-                if (ts>ts_gsmbreak+5): # return from gsmbreak
+                if (ts>ts_gsmbreak+5) and gsmbreak == 1: # return from gsmbreak
                     msg='ending gsmPWR break'
+                    gsmbreak=0
                     setbit_dochannels(15,1) # break end
             if len(msg)>0:
                 syslog(msg) # log message to file
@@ -3247,8 +3275,8 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 if OSTYPE == 'android':
                     droid.ttsSpeak(msg)
 
-        if OSTYPE == 'archlinux':
-            getset_network('ether') # chk and chg network parameters
+        #if OSTYPE == 'archlinux':
+            #getset_network('ether') # chk and chg network parameters / creates netlink l eftover??
         
         # ############################################################ temporary check to debug di part here, not as often as normally
         #read_dichannel_bits() # di read as bitmaps from registers. use together with the make_dichannel_svc()!
