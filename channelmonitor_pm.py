@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 24.12.2013'  # linux and python3 -compatible
+APVER='channelmonitor_pm.py 26.12.2013'  # linux and python3 -compatible
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -40,16 +40,11 @@ APVER='channelmonitor_pm.py 24.12.2013'  # linux and python3 -compatible
 # 23.12.2013 android and linux behavior differ related to di/do sync!
 # 24.12.2013 fixed output flapping behavior after gsmbreak, add bit changes one after another. use previous output not the powerup value. fixed channelconfig().
 # 25.12.2013 stopped log pushing on usb disconnect. removed chmod + x from within pull(). stopped recreating databases on modbus failures (tables in memory since 20.12).
-
+# 26.12.2013 replaces traceback() with +str(sys.exc_info()[1]) to be printed and syslogged. counters restored based on counters table, taking svc member, x2,y2 into account.
+                            
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
-# send gsm signal level to monitoring! not available...
-# add sqlite tables test, start dbREcreate together with channelmonitor stopping if it feels necessary to restore normal operation!
-# udp connectivity is restored via reboot. try socket reopen...
-# 30.08.2013 - each ai svc should have max time and max chg to launch rereporting. to do with classes... and make xychannels and xyvalues sql separate!
-# this script should have rebooting ower itself, not only via modbusproxy! try pm reboot
-
 
 #modbusproxy registers / Only one register can be read  or write at time (registers are sometimes long)
 #000-099 ModbusProxy information
@@ -113,10 +108,10 @@ def sqlread(table): # drops table and reads from file table.sql that must exist
     try:
         sql = open(filename).read()
     except:
-        msg='FAILURE in sqlread: could not find sql file '+filename+' in directory '+os.getcwd()
+        msg='FAILURE in sqlread: '+str(sys.exc_info()[1])
         print(msg)
         syslog(msg)
-        traceback.print_exc()
+        #traceback.print_exc()
         time.sleep(1)
         return 1
 
@@ -139,8 +134,8 @@ def sqlread(table): # drops table and reads from file table.sql that must exist
         time.sleep(0.5)
         return 0
     except:
-        traceback.print_exc()
-        msg='sqlread: COULD NOT (drop or) read sql for table '+table
+        #traceback.print_exc()
+        msg='sqlread: '+str(sys.exc_info()[1])
         print(msg)
         syslog(msg)
         time.sleep(1)
@@ -282,11 +277,10 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
 
 
         return 0
-    except: # Exception,err:
-        traceback.print_exc()
-        #syslog('err: '+repr(err))
-        msg='reading mbproxy failed'
+    except: 
+        msg='reading mbproxy failed: '+str(sys.exc_info()[1])
         print(msg)
+        syslog(msg)
         return 1
 
 
@@ -298,8 +292,10 @@ def read_hexstring(mba,regaddr,regcount): # read from modbus register as hex str
         for i in range(regcount):
             output = output + format("%04x" % result.registers[i])
     except: # Exception,err:
-        traceback.print_exc()
-        #syslog('err: '+repr(err))
+        msg='error reading modbus registers: '+str(sys.exc_info()[1])
+        #traceback.print_exc()
+        syslog(msg)
+        print(msg)
 
     return output # hex string with lenghth 4 x count or empty
 
@@ -367,7 +363,10 @@ def channelconfig(): # register settings read, write to slaves if needed, report
                                     #prepare data for the monitoring server = NOT HERE!
                                     #sendstring=sendstring+"W"+str(mba)+"."+str(regadd)+":"+str(value)+"\n"  # data just written, not verified! 
                                 except:
-                                    traceback.print_exc()
+                                    msg='error writing modbus register: '+str(sys.exc_info()[1])
+                                    #traceback.print_exc()
+                                    syslog(msg)
+                                    print(msg)
                                     respcode=1
                                 
                                 if respcode != 0:
@@ -387,10 +386,11 @@ def channelconfig(): # register settings read, write to slaves if needed, report
                             #send the actual data to the monitoring server
                             #sendstring=sendstring+"R"+str(mba)+"."+str(regadd)+":"+str(tcpdata)+"\n"  # register content reported as decimal
 
-                    except: # Exception,err:
-                        msg=' - could not read the modbus register mba.reg '+str(mba)+'.'+str(regadd)
+                    except: 
+                        msg=' - could not read the modbus register mba.reg '+str(mba)+'.'+str(regadd)+str(sys.exc_info()[1])
                         print(msg)
-                        traceback.print_exc()
+                        syslog(msg)
+                        #traceback.print_exc()
                         #syslog('err: '+repr(err))
                         time.sleep(1)
                         return 1
@@ -400,9 +400,10 @@ def channelconfig(): # register settings read, write to slaves if needed, report
         conn4.commit()            
         #udpsend(inumm,int(ts)) # sending to the monitoring server - not here, use report_setup() for this!
     except:
-        msg='channelconfig FAILURE'
+        msg='channelconfig FAILURE, '+str(sys.exc_info()[1])
         print(msg)
-        traceback.print_exc()
+        syslog(msg)
+        #traceback.print_exc()
         #syslog('err: '+repr(err))
     sys.stdout.flush()
     time.sleep(0.5)
@@ -512,8 +513,10 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
                 bit_dict.update({bit : tmp_array}) # regadd:[bit,do,di] dict member
                 reg_dict.update({regadd : bit_dict})
             except:
-                print('failure in creating tmp_array',tmp_array)
-                traceback.print_exc()
+                msg='failure in creating tmp_array '+repr(tmp_array)+' '+str(sys.exc_info()[1])
+                print(msg)
+                syslog(msg)
+                #traceback.print_exc()
                 
             mba_dict.update({mba : reg_dict})
             #print('reg_dict',reg_dict,'mba_dict',mba_dict) # debug
@@ -557,8 +560,10 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
                     respcode=0 # write_register(mba,regadd,word,2*tcpmode)
                     msg='output written - mba,regadd,value '+str(mba)+' '+str(regadd)+' '+format("%04x" % word)
                 except:
-                    msg='FAILED writing register '+str(mba)+' '+str(regadd)
-                    traceback.print_exc()
+                    msg='FAILED writing register '+str(mba)+'.'+str(regadd)+' '+str(sys.exc_info()[1])
+                    print(msg)
+                    syslog(msg)
+                    #traceback.print_exc()
                     respcode=1
 
                 syslog(msg)
@@ -573,8 +578,10 @@ def write_dochannels(): # synchronizes DO bits (output channels) with data in do
             omba=mba # to detect mba change. valuse in array mbs_array
                 
     except:
-        print('problem with dichannel grp select in write_do_channels!')
-        traceback.print_exc() # debug
+        msg='problem with dichannel grp select in write_do_channels! '+str(sys.exc_info()[1])
+        print(msg)
+        syslog(msg)
+        #traceback.print_exc() # debug
         sys.stdout.flush()
         time.sleep(1)
         return 1
@@ -767,10 +774,10 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
         return 0
 
     except:
-        msg='PROBLEM with aichannels reading or processing at '+str(int(ts))
+        msg='PROBLEM with aichannels reading or processing: '+str(sys.exc_info()[1])
         print(msg)
         syslog(msg)
-        traceback.print_exc()
+        #traceback.print_exc()
         sys.stdout.flush()
         time.sleep(0.5)
 
@@ -815,10 +822,10 @@ def make_aichannels(): # send the ai service messages to the monitoring server (
         conn3.commit() # aichannels transaction end
 
     except:
-        msg='PROBLEM with aichannels reporting'
+        msg='PROBLEM with aichannels reporting '+str(sys.exc_info()[1])
         print(msg)
         syslog(msg)
-        traceback.print_exc()
+        #traceback.print_exc()
         sys.stdout.flush()
         time.sleep(0.5)
         return 1
@@ -981,8 +988,10 @@ def read_dichannel_bits(mba): # binary inputs, bit changes to be found and value
                     MBerr[mba]=0
                 #print ', result',format("%04x" % tcpdata)
             except:
-                print('di register',mba,regadd,'read FAILURE! no sql update')
-                traceback.print_exc() # debug
+                msg='di register '+str(mba)+'.'+str(regadd)+' read FAILURE! no sql update! '+str(sys.exc_info()[1])
+                print(msg)
+                syslog(msg)
+                #traceback.print_exc() # debug
                 return 1
 
             Cmd3="select bit,value from dichannels where mba='"+str(mba)+"' and regadd='"+str(regadd)+"' group by regadd,bit" # loeme koik di kasutusel bitid sellelt registrilt
@@ -1018,8 +1027,8 @@ def read_dichannel_bits(mba): # binary inputs, bit changes to be found and value
             except: # else: # respcode>0
                 if mba<5:
                     MBerr[mba]=MBerr[mba]+1 # increase error counter
-                    msg='failed to read di register from '+str(mba)+'.'+str(regadd)
-                    traceback.print_exc() # debug
+                    msg='failed to read di register from '+str(mba)+'.'+str(regadd)+' '+str(sys.exc_info()[1])
+                    #traceback.print_exc() # debug
                     if MBerr[mba] == 1: # first error
                         print(msg) # di problem (first only)
                         syslog(msg) # di problem (first only)
@@ -1034,10 +1043,11 @@ def read_dichannel_bits(mba): # binary inputs, bit changes to be found and value
 
     except: # Exception,err:  # python3 ei taha seda viimast
         #syslog('err: '+repr(err))
-        msg='there was a problem with dichannels data reading or processing!'
+        msg='there was a problem with dichannels data reading or processing! '+str(sys.exc_info()[1])
         syslog(msg)
         print(msg)
-        traceback.print_exc()
+        #traceback.print_exc()
+        #traceback.print_exc()
         time.sleep(1)
         return 1
 
@@ -1094,10 +1104,10 @@ def make_dichannels(): # di services into to-be-sent buffer table BUT only when 
         conn1.commit() # buff2server
         conn3.commit() # dichannels transaction end
 
-    except: # Exception,err:
-        traceback.print_exc()
+    except:
+        #traceback.print_exc()
         #syslog('err: '+repr(err))
-        msg='there was a problem with make_dichannels()!'
+        msg='there was a problem with make_dichannels()! '+str(sys.exc_info()[1])
         print(msg)
         syslog(msg)
 
@@ -1446,9 +1456,11 @@ def read_counters(): # counters, usually 32 bit / 2 registers.
         return 0 #respcode
 
     except: # end reading counters
-        print('problem with counters read or processing')
-        traceback.print_exc()
-        sys.stdout.flush()
+        msg='problem with counters read or processing: '+str(sys.exc_info()[1])
+        print(msg)
+        syslog(msg)
+        #traceback.print_exc()
+        #sys.stdout.flush()
         time.sleep(1)
         return 1
 
@@ -1529,10 +1541,9 @@ def report_setup(): # send setup data to server via buff2server table as usual.
         return 0
 
     except: # setup reading  problem
-        print('problem with setup reading',Cmd4)
-        traceback.print_exc()
-        msg='setup reporting failure (setup reading problem) at '+str(int(ts))
+        msg='setup reporting failure (setup reading problem) '+str(sys.exc_info()[1])
         syslog(msg) # log message to file
+        print(msg)
         time.sleep(1)
         return 1
 
@@ -1638,13 +1649,10 @@ def report_channelconfig(): #report *channels cfg part as XYn for each member to
         return 0
 
     except: # channels config reading  problem
-        print('problem with channelconfig reading',Cmd4)
-        traceback.print_exc()
-        sys.stdout.flush()
-        msg='channelconfig reporting problem at '+str(int(ts))
+        msg='channelconfig reporting problem at '+str(sys.exc_info()[1])
         print(msg)
-        syslog(msg) # log message to file
-        sys.stdout.flush()
+        syslog(msg) 
+        #sys.stdout.flush()
         time.sleep(1)
         return 1
 
@@ -1674,8 +1682,8 @@ def syslog(msg): # sending out syslog message. previously also appending a line 
         return 0
     except:
         print('logging problem to file ',LOG)
-        traceback.print_exc()
-        sys.stdout.flush()
+        #traceback.print_exc()
+        #sys.stdout.flush()
         time.sleep(1)
         return 1
 
@@ -1795,9 +1803,11 @@ def udpmessage(): # udp message creation based on  buff2server data, does the re
             print(svc_count2,"SERVICE LINES IN BUFFER waiting for ack from monitoring server")
 
     except: # buff2server reading unsuccessful. unlikely...
-        print('problem with buff2server read')
-        traceback.print_exc()
-        sys.stdout.flush()
+        msg='problem with buff2server read '+str(sys.exc_info()[1])
+        print(msg)
+        syslog(msg)
+        #traceback.print_exc()
+        #sys.stdout.flush()
         time.sleep(1)
 
 
@@ -1830,10 +1840,10 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
         client.write_register(address=114, value=100, unit=1)  # short pulse
         setbit_dochannels(14,1) # bit, value. commLED ON until got udp
     except:
-        msg='failed to light commLED'   # show as one line
+        msg='failed to light commLED '+str(sys.exc_info()[1])   # show as one line
         print(msg)
         syslog(msg)
-        traceback.print_exc()
+        #traceback.print_exc()
         #pass
         
     try:
@@ -1899,10 +1909,10 @@ def push(filename): # send (gzipped) file to supporthost
         TCW[3]=TCW[3]+dnsize # tcp out inc
         return 0
     except:
-        msg='the file '+filename+' was NOT sent to '+destinationdirectory
+        msg='the file '+filename+' was NOT sent to '+destinationdirectory+' '+str(sys.exc_info()[1])
         syslog(msg)
         print(msg)
-        traceback.print_exc()
+        #traceback.print_exc()
         return 1
 
 
@@ -1934,18 +1944,18 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
         output.write(response.content)
         output.close()
     except:
-        msg='pull: partial or failed download of temporary file '+filepart
+        msg='pull: partial or failed download of temporary file '+filepart+' '+str(sys.exc_info()[1])
         print(msg)
         syslog(msg)
-        traceback.print_exc()
+        #traceback.print_exc()
         
     try:
         dnsize=os.stat(filepart)[6]  # int(float(subexec('ls -l '+filename,1).split(' ')[4]))
     except:
-        msg='pull: got no size for file '+os.getcwd()+'/'+filepart
+        msg='pull: got no size for file '+os.getcwd()+'/'+filepart+' '+str(sys.exc_info()[1])
         print(msg)
         syslog(msg)
-        traceback.print_exc()
+        #traceback.print_exc()
         oksofar=0
 
     if dnsize == filesize: # ok
@@ -1958,8 +1968,10 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
             os.rename(filename, filebak) # keep the previous version if exists
             msg='renamed '+filename+' to '+filebak
         except:
-            traceback.print_exc()
-            msg='FAILED to rename '+filename+' to '+filebak
+            #traceback.print_exc()
+            msg='FAILED to rename '+filename+' to '+filebak+' '+str(sys.exc_info()[1])
+            print(msg)
+            syslog(msg)
             oksofar=0
 
         print(msg)
@@ -1969,9 +1981,11 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
             os.rename(filepart, filename) #rename filepart to filename2
             msg='renamed '+filepart+' to '+filename
         except:
-            msg='FAILED to rename '+filepart+' to '+filename
+            msg='FAILED to rename '+filepart+' to '+filename+' '+str(sys.exc_info()[1])
+            print(msg)
+            syslog(msg)
             oksofar=0
-            traceback.print_exc()
+            #traceback.print_exc()
         print(msg)
         syslog(msg)
 
@@ -1994,8 +2008,8 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
                 #msg='pull: gz file '+filename+' unzipped to '+filename2+', previous file kept as '+filebak
             except:
                 os.rename(filename2+'.bak', filename2) # restore the previous versioon if unzip failed
-                msg='pull: file '+filename+' unzipping failure, previous file '+filename2+' restored'
-                traceback.print_exc()
+                msg='pull: file '+filename+' unzipping failure, previous file '+filename2+' restored. '+str(sys.exc_info()[1])
+                #traceback.print_exc()
                 print(msg)
                 syslog(msg)
                 return 1
@@ -2007,8 +2021,8 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
                 f.close()
                 #msg='pull: tgz file '+filename+' successfully unpacked'
             except:
-                msg='pull: tgz file '+filename+' unpacking failure!'
-                traceback.print_exc()
+                msg='pull: tgz file '+filename+' unpacking failure! '+str(sys.exc_info()[1])
+                #traceback.print_exc()
                 print(msg)
                 syslog(msg)
                 return 1
@@ -2058,7 +2072,9 @@ def socket_restart(): # close and open tcpsocket
         time.sleep(1)
 
     except:
-        print('tcp socket was not open')
+        msg='tcp socket was not open '+str(sys.exc_info()[1])
+        print(msg)
+        syslog(msg)
         #traceback.print_exc() # debug
 
     # open a new socket
@@ -2076,12 +2092,8 @@ def socket_restart(): # close and open tcpsocket
         return 0
 
     except:
-        print('modbusproxy socket open failed, to',tcpaddr, tcpport)
-        #traceback.print_exc() # debug
-        sys.stdout.flush() # to see the print lines above in log
-        msg='modbusproxy reconnection failed at '+str(int(ts))
+        msg='modbusproxy reconnection failed '+str(sys.exc_info()[1])
         print(msg)
-        sys.stdout.flush()
         syslog(msg) # log message to file
         time.sleep(1)
         return 1
@@ -2133,10 +2145,9 @@ def logcat_dumpsend(): # execute logcat dump and push
             time.sleep(6)
             
     except:
-        type, value, trace = sys.exc_info()
-        #traceback.print_exc()
-        print(type,value,trace)
-        sys.stdout.flush()
+        msg='logcat_dumpsend() FAILED: ' +str(sys.exc_info()[1])
+        print(msg)
+        syslog(msg)
         time.sleep(3)
     
     try:
@@ -2162,8 +2173,7 @@ def setbit_dochannels(bit, value, mba = 1, regadd = 0):  # to get set coil funct
         syslog(msg)
         return 0
     except:
-        msg='output bit '+str(bit)+' setting to '+str(value)+' in table dochannels FAILED!'
-        traceback.print_exc() # debug
+        msg='output bit '+str(bit)+' setting to '+str(value)+' in table dochannels FAILED! '+str(sys.exc_info()[1])
         print(msg)
         syslog(msg)
         return 1
@@ -2239,15 +2249,82 @@ def change_setup(register,value):  # iga muutus omaette transaktsioonina
         print('setup change done for',sregister,svalue)
         return 0
     except: #if not succcessful, then not a valid setup message
-        msg='setup change problem, possibly the assumed setup register '+sregister+' not found in setup table!'
+        msg='setup change problem, possibly the assumed setup register '+sregister+' not found in setup table! '+str(sys.exc_info()[1])
         print(msg)
         syslog(msg)
-        traceback.print_exc() # temporary debug only
-        sys.stdout.flush()
         time.sleep(1)
         return 1
         
+
+
+def restore_counter(register,value,counter_row): # counter volumes to be restored - service names and counters should match in counters table!
+    msg='going to set counter based on svc '+register+' value '+value+' '+repr(counter_row) # debug
+    print(msg) # debug
+    syslog(msg)
+    readbackfail=0
+    
+    try:
+        mba=int(float(counter_row[0]))
+        regadd=int(float(counter_row[1])) # MSW of the counter, number of words defined by wcount
+        member=int(float(counter_row[2]))
+        wcount=counter_row[3] # integer already in table
+        x2=int(float(counter_row[4])) # conversion from
+        y2=int(float(counter_row[5])) # conversion to, assuming zero is at zero for both input and output of the conversion
+        values=value.split(' ') # array
+        print('restore_counter() values '+repr(values)) # debug
+        for memb in range(len(values)): # members in value are related to various counters
+            #print('restore_counter(): trying to match member '+str(memb+1)) # debug 
+            #for w in range(wcount): # possible future improvement, for counter word length above 2
+            if memb+1 == member: # member numbering in counters table start from 1, not 0
+                value=int((int(float(values[memb])*(x2/y2))&4294901760)/65536)
+                msg='restore_counter() word value '+str(value)+' to be written into mba '+str(mba)+' regadd '+str(regadd)
+                print(msg)
+                syslog(msg)
+                client.write_register(address=regadd, value=value, unit=mba) # MSW
+                time.sleep(0.1)
+                result=client.read_holding_registers(address=regadd+1, count=1, unit=mba)
+                realvalue=result.registers[0]
+                if realvalue == value:
+                    print('MSW OK, value '+str(value)+' (hex '+format("%04x" % realvalue))
+                else:
+                    print('restore_counter() MSW BAD! got '+str(realvalue)+' (hex '+format("%04x" % realvalue)+') instead of '+str(value))
+                    readbackfail=1
+                time.sleep(0.1)
+                value=int((int(float(values[memb])*(x2/y2)))&65535)
+                msg='restore_counter() word value '+str(value)+' to be written into mba '+str(mba)+' regadd '+str(regadd+1)
+                print(msg)
+                syslog(msg)
+                client.write_register(address=regadd+1, value=value, unit=mba) # LSW
+                time.sleep(0.1)
+                result=client.read_holding_registers(address=regadd+1, count=1, unit=mba)
+                realvalue=result.registers[0]
+                if realvalue == value:
+                    print('LSW OK, value '+str(value)+' (hex '+format("%04x" % realvalue))
+                else:
+                    print('restore_counter() LSW BAD! got '+str(realvalue)+' (hex '+format("%04x" % realvalue)+') instead of '+str(value))
+                    readbackfail=1
+                time.sleep(0.1)
+
+                read_counters() # debug test
+                
+                if readbackfail == 0: # checking the result
+                    msg='successfully restored member '+str(member)+' value for counter '+str(mba)+'.'+str(regadd)+' for '+register
+                    print(msg)
+                    syslog(msg)
+                    return 0
+                else:
+                    msg='value check FAILED after counter '+str(regadd)+' writing!' 
+    except:
+        traceback.print_exc()
+        msg='FAILED to restore counter for '+register+', '+str(str(sys.exc_info()[1]))
+        print(msg) # debug, is this the same as traceback()?
         
+    print(msg)
+    syslog(msg)
+    return 1
+    
+
+                                        
 # ### procedures end ############################################
 
 
@@ -2421,11 +2498,9 @@ try:
     conn4= sqlite3.connect(':memory:')  # sqlite3.connect('./asetup',2) # setup table, only for update, NO INSERT! 2 s timeout. timeout will cause exexution stop.
     
 except:
-    msg=='sqlite connection problem' # should be reported using backdoor connection
+    msg=='sqlite connection problem '+str(sys.exc_info()[1])
     print(msg)
     syslog(msg)
-    traceback.print_exc() # sqlite connect failure
-    sys.stdout.flush()
     time.sleep(3)
 
 cursor1=conn1.cursor() # cursors to read data from tables
@@ -2491,7 +2566,7 @@ except: # some linux
             print(sys.argv[1],sys.argv[2]) # <addr:ip> <sql_dir>
         except:
             print('parameters (socket and sql_dir) needed to run on linux!')
-            traceback.print_exc()
+            #traceback.print_exc()
             sys.exit()
 
         try:
@@ -2499,8 +2574,10 @@ except: # some linux
             tcpaddr=sys.argv[1].split(':')[0] # "10.0.0.11" # ip to use for modbusTCP
             print('using',tcpaddr,tcpport)
         except:
-            print('invalid address:port given',tcpaddr,tcpport)
-            traceback.print_exc()
+            msg='invalid address:port '+tcpaddr+':'+str(tcpport)+'  '+str(sys.exc_info()[1])
+            print(msg)
+            syslog(msg)
+            #traceback.print_exc()
             sys.exit()
 
         #from sqlite3 import dbapi2 as sqlite3 # in linux
@@ -2718,9 +2795,9 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                         cursor1.execute(Cmd1) # selected
                         conn1.execute(Cmd3) # deleted
                     except:
-                        print('problem with',Cmd3)
-                        traceback.print_exc()
-                        sys.stdout.flush()
+                        msg='problem with '+Cmd3+' '+str(sys.exc_info()[1])
+                        print(msg)
+                        syslog(msg)
                         time.sleep(1)
                         #
 
@@ -2765,9 +2842,11 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                                 #print ', rows with inum',inum,'deleted from buff2server' # debug
 
                     except:
-                        print('trouble with',Cmd1)
-                        traceback.print_exc()
-                        sys.stdout.flush()
+                        msg='trouble with '+Cmd1+': '+str(sys.exc_info()[1])
+                        print(msg)
+                        syslog(msg)
+                        #traceback.print_exc()
+                        #sys.stdout.flush()
                         time.sleep(1)
 
 
@@ -2806,23 +2885,21 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                                     print(msg)
                                     syslog(msg)
 
-                                if sregister == 'ECW': # counter volumes to be restored - sobita counters infoga!
-                                    print('going to set counters 412 and 414') # debug
-                                    if len(svalue.split(' ')) == 2: # member count for traffic: udpin, udpout, tcpin, tcpout in bytes
-                                        mba = 1 # could be recreated fromm counters based on serveice names...
-                                        try:
-                                            client.write_register(address=412, value=((int(float(svalue.split(' ')[0])))&4294901760)/65536, unit=mba) # one by one
-                                            client.write_register(address=413, value=((int(float(svalue.split(' ')[0])))&65535), unit=mba) # one by one
-                                            client.write_register(address=414, value=((int(float(svalue.split(' ')[1]))/3)&4294901760)/65536, unit=mba) # saatmisel korrutatakse kolmega
-                                            client.write_register(address=415, value=((int(float(svalue.split(' ')[1]))/3)&65535), unit=mba) # this is a special counter, 1/3 of pump power
-                                            msg='restored energy counters for ECW to '+svalue.split(' ')[0]+" "+svalue.split(' ')[1]
-                                        except:
-                                            msg='FAILED to restore energy counters for ECW'
-                                            traceback.print_exc()
-
-                                        print(msg)
-                                        syslog(msg)
-
+                                # counters restore
+                                Cmd3="select mba,regadd,member,wcount,x2,y2 from counters where val_reg='"+sregister+"'"
+                                cursor3.execute(Cmd3)
+                                #print(Cmd3) # debug
+                                conn3.commit()
+                                for row in cursor3:
+                                    #print('going to restore '+sregister+' based on '+repr(row)) # debug
+                                    if restore_counter(sregister,svalue,row) == 0: # restoring the counter if match exists
+                                        msg='successfully restored '+sregister+' to counter'
+                                    else:
+                                        msg='FAILED to restore '+sregister+' to counter'
+                                    
+                                    print(msg)
+                                    syslog(msg)
+                                    
                         else: # must be cmd, not to be saved into setup table
                             msg='remote command '+sregister+':'+svalue+' detected at '+str(int(ts))
                             print(msg)
@@ -2846,8 +2923,10 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                         for line in conn4.iterdump(): # only one table, setup connected 
                             f.write('%s\n' % line)
                 except:
-                    msg='FAILURE dumping setup into setup.sql'
-                    traceback.print_exc()
+                    msg='FAILURE dumping setup into setup.sql '+str(sys.exc_info()[1])
+                    print(msg)
+                    syslog(msg)
+                    #traceback.print_exc()
                     
                 print(msg)
                 syslog(msg)
@@ -3050,10 +3129,15 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                     print('wrong number of parameters for pull')
                     
             if TODO.split(',')[0] == 'push': # upload a file (with name and passcode given)
-                filename=TODO.split(',')[1]
-                print('starting push with',filename)
-                todocode=push(filename) # no automated retry here
-
+                try:
+                    filename=TODO.split(',')[1]
+                    print('starting push with',filename)
+                    todocode=push(filename) # no automated retry here
+                except:
+                    msg='invalid cmd syntax for push'
+                    print(msg)
+                    syslog(msg)
+                    todocode=99
 
             if TODO.split(',')[0] == 'sqlread':
                 if len(TODO.split(',')) == 2: # cmd:sqlread,aichannels (no extension for sql file!)
@@ -3096,7 +3180,10 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                             syslog(msg)
                             todocode=0
                         except:
-                            traceback.print_exc()
+                            msg='FAILED to execute '+script+' '+str(sys.exc_info()[1])
+                            print(msg)
+                            syslog(msg)
+                            #traceback.print_exc()
                             todocode=1
                         time.sleep(10) # take a break while subprocess is active just in case...
                     else:
