@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 23.12.2013'  # linux and python3 -compatible
+APVER='channelmonitor_pm.py 24.12.2013'  # linux and python3 -compatible
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -39,6 +39,8 @@ APVER='channelmonitor_pm.py 23.12.2013'  # linux and python3 -compatible
 # 22.12.2013 syslog server address controlled by S514 now in setup.sql.
 # 23.12.2013 android and linux behavior differ related to di/do sync!
 # 24.12.2013 fixed output flapping behavior after gsmbreak, add bit changes one after another. use previous output not the powerup value. fixed channelconfig().
+# 25.12.2013 stopped log pushing on usb disconnect. removed chmod + x from within pull(). stopped recreating databases on modbus failures (tables in memory since 20.12).
+
 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
@@ -111,7 +113,7 @@ def sqlread(table): # drops table and reads from file table.sql that must exist
     try:
         sql = open(filename).read()
     except:
-        msg='sqlread: could not find sql file '+filename
+        msg='FAILURE in sqlread: could not find sql file '+filename+' in directory '+os.getcwd()
         print(msg)
         syslog(msg)
         traceback.print_exc()
@@ -194,13 +196,14 @@ def read_proxy(what): # read modbus proxy registers, wlan mac most importantly. 
         result = client.read_holding_registers(address=200, count=1, unit=255) # USB state. 1 = running, disconnected
         USBnewState=result.registers[0]
         if USBnewState != USBstate and USBstate == 1: # was running but not any more, save logcat dump
-            msg="logcat dump to be saved due to USB not running any more" # peaks kohe teavitama!
+            msg="lost USB running state!"
+        #    msg="logcat dump to be saved due to USB not running any more" # peaks kohe teavitama!
             print(msg)
             syslog(msg)
-            time.sleep(10)
-            resultcode=logcat_dumpsend() # trying to dump and push logcat content
-            if resultcode == 0:
-                print('logcat dump successfully sent')
+            time.sleep(1)
+        #    resultcode=logcat_dumpsend() # trying to dump and push logcat content on usb disconnect
+        #    if resultcode == 0:
+        #        print('logcat dump successfully sent')
                 
         USBstate=USBnewState
 
@@ -1648,19 +1651,21 @@ def report_channelconfig(): #report *channels cfg part as XYn for each member to
 
 
 
-def syslog(msg): # appending a line to the log file
-    #rotation should be added if the file becomes too big
-    global LOG, ts, logaddr
+def syslog(msg): # sending out syslog message. previously also appending a line to the log file
+    global LOG, ts, logaddr,TCW
     msg=msg+"\n" # add newline to the end
     #print('syslog send to',logaddr) # debug
     
     try: # syslog first
         UDPlogSock.sendto(msg.encode('utf-8'),logaddr)
+        if not '255.255.' in logaddr[0] and not '10.0.' in logaddr[0] and not '192.168.' in logaddr[0]: # sending syslog out of local network
+            TCW[1]=TCW[1]+len(msg) # udp out increase, payload only
     except:
         pass # kui udp ei toimi, ei toimi ka syslog
         #print 'could NOT send syslog message to '+repr(logaddr)
         #traceback.print_exc()
 
+    
     return 0 # no logging to file except in debug mode! on linux errors go to /root/d4c/appd.log anyway
 
     try: # file write
@@ -1856,7 +1861,7 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
 
 
 def push(filename): # send (gzipped) file to supporthost
-    global SUPPORTHOST, mac
+    global SUPPORTHOST, mac,TCW
     destinationdirectory = 'support/pyapp/'+mac
     #print 'starting with pushing',filename # debug
     if os.path.isfile(filename):
@@ -1876,7 +1881,8 @@ def push(filename): # send (gzipped) file to supporthost
         f_out.close()
         f_in.close()
         filename = filename+'.gz' # new filename to send
-        msg='the file was gzipped to '+filename+' with size '+str(os.stat(filename)[6]) # the original file is kept!
+        dnsize=os.stat(filename)[6] # file size to be sent
+        msg='the file was gzipped to '+filename+' with size '+str(dnsize) # the original file is kept!
         print(msg)
         syslog(msg)
 
@@ -1887,9 +1893,10 @@ def push(filename): # send (gzipped) file to supporthost
                             data={'mac': destinationdirectory}
                          )
         print('post response:',r.text) # nothing?
-        msg='the file '+filename+' is sent to '+destinationdirectory
+        msg='file '+filename+' with size '+str(dnsize)+' sent to '+destinationdirectory
         syslog(msg)
         print(msg)
+        TCW[3]=TCW[3]+dnsize # tcp out inc
         return 0
     except:
         msg='the file '+filename+' was NOT sent to '+destinationdirectory
@@ -1902,7 +1909,7 @@ def push(filename): # send (gzipped) file to supporthost
 
 
 def pull(filename,filesize,start): # uncompressing too if filename contains .gz and succesfully retrieved. start=0 normally. higher with resume.
-    global SUPPORTHOST #
+    global SUPPORTHOST,TCW #
     print('trying to retrieve file '+SUPPORTHOST+'/'+filename+' from byte '+str(start))
     oksofar=1 # success flag
     filename2='' # for uncompressed from the downloaded file
@@ -1915,19 +1922,15 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
         syslog(msg)
         return 99 # illegal parameters or file bigger than stated during download resume
 
-    #req = urllib2.Request('http://'+SUPPORTHOST+'/'+filename) # to be changed to requests
     req = 'http://'+SUPPORTHOST+'/'+filename
-    #req.headers['Range'] = 'bytes=%s-' % (start) # get from start until the end.  possible to continue in a loop if needed using 3G
     pullheaders={'Range': 'bytes=%s-' % (start)} # with requests
     
     msg='trying to retrieve file '+SUPPORTHOST+'/'+filename+' from byte '+str(start)+' using '+repr(pullheaders)
     print(msg)
     syslog(msg)
     try:
-        #response = urllib2.urlopen(req)
         response = requests.get(req, headers=pullheaders) # with python3
         output = open(filepart,'wb')
-        #output.write(response.read()) # was with urllib2
         output.write(response.content)
         output.close()
     except:
@@ -1955,6 +1958,7 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
             os.rename(filename, filebak) # keep the previous version if exists
             msg='renamed '+filename+' to '+filebak
         except:
+            traceback.print_exc()
             msg='FAILED to rename '+filename+' to '+filebak
             oksofar=0
 
@@ -1967,6 +1971,7 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
         except:
             msg='FAILED to rename '+filepart+' to '+filename
             oksofar=0
+            traceback.print_exc()
         print(msg)
         syslog(msg)
 
@@ -1978,6 +1983,7 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
             try:
                 os.rename(filename2, filename2+'.bak') # keep the previous versioon if exists
             except:
+                #traceback.print_exc()
                 pass
 
             try:
@@ -1985,43 +1991,60 @@ def pull(filename,filesize,start): # uncompressing too if filename contains .gz 
                 output = open(filename2,'wb')
                 output.write(f.read());
                 output.close() # file with filename2 created
-                msg='pull: gz file '+filename+' unzipped to '+filename2+', previous file kept as '+filebak
+                #msg='pull: gz file '+filename+' unzipped to '+filename2+', previous file kept as '+filebak
             except:
                 os.rename(filename2+'.bak', filename2) # restore the previous versioon if unzip failed
                 msg='pull: file '+filename+' unzipping failure, previous file '+filename2+' restored'
                 traceback.print_exc()
-            print(msg)
-            syslog(msg)
+                print(msg)
+                syslog(msg)
+                return 1
 
         if '.tgz' in filename: # possibly contains a directory
             try:
                 f = tarfile.open(filename,'r')
                 f.extractall() # extract all into the current directory
                 f.close()
-                msg='pull: tgz file '+filename+' successfully unpacked'
+                #msg='pull: tgz file '+filename+' successfully unpacked'
             except:
                 msg='pull: tgz file '+filename+' unpacking failure!'
                 traceback.print_exc()
-            print(msg)
-            syslog(msg)
+                print(msg)
+                syslog(msg)
+                return 1
 
-        if '.py' in filename2 or '.sh' in filename2: # make it executable, only works with gzipped files!
-            st = os.stat('filename2')
-            os.chmod(filename2, st.st_mode | stat.S_IEXEC) # add +x for the owner
+        # temporarely switching off this chmod feature, failing!!
+        #if '.py' in filename2 or '.sh' in filename2: # make it executable, only works with gzipped files!
+        #    try:
+        #        st = os.stat('filename2')
+        #        os.chmod(filename2, st.st_mode | stat.S_IEXEC) # add +x for the owner
+        #        msg='made the pulled file executable'
+        #        print(msg)
+          #      syslog(msg)
+         #       return 0
+        #    except:
+        #        msg='FAILED to make pulled file executable!'
+        #        print(msg)
+        ##        syslog(msg)
+        #        traceback.print_exc()
+        #        return 99
+        
         return 0
+        
     else:
         if dnsize<filesize:
             msg='pull: file '+filename+' received partially with size '+str(dnsize)
             print(msg)
             syslog(msg)
-            return 1
+            return 1 # next try will continue 
         else:
             msg='pull: file '+filename+' received larger than unexpected, in size '+str(dnsize)
+            TCW[2]=TCW[2]+dnsize # adding tcp_in volume to the traffic counter
             print(msg)
             syslog(msg)
             return 99
 
-# def pull() end. if it was py, reboot should folow. if it was sql, table reread must de done.
+# def pull() end. if it was py, reboot should follow. if it was sql, table reread must de done.
 
 
 
@@ -2155,9 +2178,11 @@ def bit_replace(word,bit,value): # changing word with single bit value
     return ((word & (65535 - 2**bit)) + (value<<bit))
     
 
-def getset_network(interface):  # check and change if needed mac and ip
-    #mac_ip=subexec(['/root/d4c/getnetwork.sh',interface],1).decode("utf-8").split(' ') # returns [maci, ip] currently in use  # kuidas param anti??
+def getset_network(interface):  # check and change if needed mac and ip. FIX parameter to subexec!
+    global ts, sendstring, mac
+    #mac_ip=subexec(['/root/d4c/getnetwork.sh',interface],1).decode("utf-8").split(' ') # returns [maci, ip] currently in use  # kuidas param anti?? annab vea
     mac_ip=subexec('/root/d4c/getnetwork.sh',1).decode("utf-8").split(' ') # returns [maci, ip] currently in use
+    mac_ip[1]=mac_ip[1].split('/')[0] # remove trailing '/24\n' from ip_addr part in this mac_ip tuple
     conflines = open('/root/d4c/network.conf').read().splitlines()  # read the configuration file to an array of lines
     conf=['','',''] # config file in array of mac,ip,gw
     for line in conflines:
@@ -2175,19 +2200,28 @@ def getset_network(interface):  # check and change if needed mac and ip
     
     if not conf[0] in mac_ip[0] or not conf[1] in mac_ip[1]: # at least one of the parameters invalid
         msg='network setup NOT OK, should be '+repr(conf)+', is '+repr(mac_ip)+' - going to change!'
-        #print(msg)
-        #syslog(msg)
+        print(msg)
+        syslog(msg)
         try:
             subexec('/root/d4c/setnetwork.sh',0) # change the network settings according to the config file /root/d4c/network.conf
             msg='network setup changed to '+repr(mac_ip)
+            mac=mac_ip[0]
         except:
-            print('FAILED  to set network parameters!')
+            msg='FAILED to set network parameters, want '+repr(conf)+' but got '+repr(mac_ip)
+            print(msg)
+            syslog(msg)
+            mac=conf[0] # replacing the actual mac with the one we need for identification even if not true!
+            return 1
     else:
-        msg='network setup OK '+repr(mac_ip)
+        msg='network setup OK: mac,ip '+repr(mac_ip)
+        mac=mac_ip[0] # to global variable
+        sendstring=sendstring+'ip:'+mac_ip[1]+'\n'
+        udpsend(0,int(ts)) # send LAN ip address to monitoring system, only if linux
         
     print(msg)
     syslog(msg)
-    return conf[0] # the mac that we need, hopefully it really is the same as well
+    
+    return 0  #  mac_ip # actual [mac.ip]   # was conf[0] # return actual mac in use
 
     
     
@@ -2356,7 +2390,50 @@ gsmbreak=0 # 1 if powerbreak ongoing, do bit 15
 #from pymodbus.client.sync import ModbusSerialClient as ModbusClient
 from pymodbus.register_read_message import *
 
+buf=1024 # udb input
+shost="46.183.73.35" # udp listening server - should be configurable! fallback address here?
+udpport=44445 # fallback port here?
+saddr=(shost,udpport) # mon server
+# shost ja udpport voiks ka parameetritega olla.
 
+
+print("SERVER saddr",saddr,', MODBUSPROXY tcpaddr',tcpaddr,tcpport)
+
+sys.stdout.flush() # to see the print lines above in log
+time.sleep(1) # start
+
+tcpwait=2 # alla 0.8 ei tasu, see on proxy tout...  #0.3 # how long to wait for an answer from modbusTCP socket
+
+UDPSock = socket(AF_INET,SOCK_DGRAM)
+UDPSock.settimeout(0.1) # (0.1) use 1 or more for testing # in () timeout to wait for data from server. defines alsomain loop interval / execution speed!!
+
+host='0.0.0.0' # own ip for udp, should always work, no need for socket binding
+addr = (host,udpport) # itself
+
+#database related init
+import sqlite3
+conn1tables=['buff2server']
+conn3tables=['aichannels','dichannels','dochannels','counters','chantypes','devices']
+conn4tables=['setup']
+try:
+    conn1= sqlite3.connect(':memory:')  # conn1 = sqlite3.connect('./buff2server',2) # buffer data from modbus registers, unsent or to be resent
+    conn3= sqlite3.connect(':memory:')  # sqlite3.connect('./modbus_channels',2) # modbus register related tables / sometimes locked!!
+    conn4= sqlite3.connect(':memory:')  # sqlite3.connect('./asetup',2) # setup table, only for update, NO INSERT! 2 s timeout. timeout will cause exexution stop.
+    
+except:
+    msg=='sqlite connection problem' # should be reported using backdoor connection
+    print(msg)
+    syslog(msg)
+    traceback.print_exc() # sqlite connect failure
+    sys.stdout.flush()
+    time.sleep(3)
+
+cursor1=conn1.cursor() # cursors to read data from tables
+cursor3=conn3.cursor()
+cursor3a=conn3.cursor() # the second cursor for the same connection
+cursor4=conn4.cursor()
+
+    
 
 
 try: # is it android? using modbustcp then
@@ -2372,24 +2449,27 @@ try: # is it android? using modbustcp then
     
     tcpport=10502 # modbusproxy
     tcpaddr="127.0.0.1" # localhost ip to use for modbusproxy
+    client = ModbusClient(host=tcpaddr, port=tcpport)
+    
     import BeautifulSoup # ?
     #import gdata.docs.service
     import termios
-    import sqlite3
     os.chdir('/sdcard/sl4a/scripts/d4c')
     
-    print('running on android')
-    print(os.getcwd())
-
+    msg='running on android, current directory '+os.getcwd()
+    print(msg)
+    syslog(msg)
+    
 except: # some linux
+    tcpport=0 # modbus rtu
+    
     if 'ARCH' in os.uname()[2]: # if os.environ['PWD'] == '/root':   # olinuxino 
         OSTYPE='archlinux'
         from pymodbus.client.sync import ModbusSerialClient as ModbusClient # using serial modbusRTU
+        client = ModbusClient(method='rtu', stopbits=1, bytesize=8, parity='E', baudrate=19200, timeout=0.2, port='/dev/ttyAPP0')
         
         print('running on archlinux')
         os.chdir('/root/d4c') # OLINUXINO
-        import sqlite3
-        #import pyserial # is this needed?
         
         from droidcontroller.indata import InData
         from droidcontroller.comm_system import CommSystem
@@ -2398,12 +2478,12 @@ except: # some linux
         
         tcpport=0 # using pyserial
         tcpaddr='' # no modbustcp address given
-        getset_network('ether') # get conf and set mac,ip
-    
-    else:
+        
+    else: #mac saamine tegemata!
         OSTYPE=os.environ['OSTYPE'] #  == 'linux': # running on linux, not android
         OSTYPE='linux'
         from pymodbus.client.sync import ModbusTcpClient as ModbusClient # modbusTCP
+        client = ModbusClient(method='rtu', stopbits=1, bytesize=8, parity='E', baudrate=19200, timeout=0.2, port='/dev/ttyAPP0') # change if needed
         
         print('running on generic linux')   # argumente vaja!
 
@@ -2423,15 +2503,26 @@ except: # some linux
             traceback.print_exc()
             sys.exit()
 
-        from sqlite3 import dbapi2 as sqlite3 # in linux
+        #from sqlite3 import dbapi2 as sqlite3 # in linux
         os.chdir(sys.argv[2]) # ('/srv/scada/acomm/sql')
         print(os.getcwd())
             
     
 print('current dir',os.getcwd())
+#create tables from sql files
+for table in conn1tables:
+    sqlread(table)
+for table in conn3tables:
+    sqlread(table)
+for table in conn4tables:
+    sqlread(table)
 
+#databases are created now, needed for setup handling
+if OSTYPE == 'archlinux':    #mac=getset_network('ether')[0] # get conf and set mac,ip, returns mac and ip in use
+    getset_network('ether') # sets mac too
 
-
+        
+        
 try: # is another copy of this script already running?
     UDPlockSock.bind(lockaddr)
     msg='\n'+APVER+' starting at '+str(int(ts))
@@ -2450,69 +2541,18 @@ except: # lock active
 
 
 
-if tcpport != 0: # modbusTCP
-    client = ModbusClient(host=tcpaddr, port=tcpport)
-else: # modbusRTU
-    client = ModbusClient(method='rtu', stopbits=1, bytesize=8, parity='E', baudrate=19200, timeout=0.2, port='/dev/ttyAPP0')
+#if tcpport != 0: # modbusTCP
+#    client = ModbusClient(host=tcpaddr, port=tcpport)
+#else: # modbusRTU
+#    client = ModbusClient(method='rtu', stopbits=1, bytesize=8, parity='E', baudrate=19200, timeout=0.2, port='/dev/ttyAPP0')
 
 
 
 
 
 if stop == 0: # lock ok
-    buf=1024 # udb input
-    shost="46.183.73.35" # udp listening server
-    udpport=44445 # voib ka samast masinast saata sama ip ja pordi pealt! bindima ei pea!
-    saddr=(shost,udpport) # mon server
-    # shost ja udpport voiks ka parameetritega olla.
-
-
-    print("SERVER saddr",saddr,', MODBUSPROXY tcpaddr',tcpaddr,tcpport)
-
-    sys.stdout.flush() # to see the print lines above in log
-    time.sleep(1) # start
-
-    tcpwait=2 # alla 0.8 ei tasu, see on proxy tout...  #0.3 # how long to wait for an answer from modbusTCP socket
-
-    UDPSock = socket(AF_INET,SOCK_DGRAM)
-    UDPSock.settimeout(0.1) # (0.1) use 1 or more for testing # in () timeout to wait for data from server. defines alsomain loop interval / execution speed!!
-
-    host='0.0.0.0' # own ip for udp, should always work, no need for socket binding
-    addr = (host,udpport) # itself
-
-    conn1tables=['buff2server']
-    conn3tables=['aichannels','dichannels','dochannels','counters','chantypes','devices']
-    conn4tables=['setup']
-
+    
     #create sqlite connections (while located in sql_dir)
-    try:
-        conn1 = sqlite3.connect(':memory:')  # conn1 = sqlite3.connect('./buff2server',2) # buffer data from modbus registers, unsent or to be resent
-        conn3 = sqlite3.connect(':memory:')  # sqlite3.connect('./modbus_channels',2) # modbus register related tables / sometimes locked!!
-        conn4 = sqlite3.connect(':memory:')  # sqlite3.connect('./asetup',2) # setup table, only for update, NO INSERT! 2 s timeout. timeout will cause exexution stop.
-        #create tables from sql files
-        for table in conn1tables:
-            sqlread(table)
-        for table in conn3tables:
-            sqlread(table)
-        for table in conn4tables:
-            sqlread(table)
-    except:
-        msg=='sqlite connection problem' # should be reported using backdoor connection
-        print(msg)
-        syslog(msg)
-        traceback.print_exc() # sqlite connect failure
-        sys.stdout.flush()
-        time.sleep(3)
-
-    #conn.execute("PRAGMA journal_mode=wal")  # to speed up
-    #conn1.execute("PRAGMA synchronous=OFF")  # only important files files?
-    #conn3.execute("PRAGMA synchronous=OFF")
-    #conn4.execute("PRAGMA synchronous=OFF")    #
-    cursor1=conn1.cursor() # cursors to read data from tables
-    #cursor2=conn2.cursor() # not in use, sent2server
-    cursor3=conn3.cursor()
-    cursor3a=conn3.cursor() # the second cursor for the same connection
-    cursor4=conn4.cursor()
     
     # test if table setup is preset 
     #Cmd='select * from setup'
@@ -2563,8 +2603,8 @@ if stop == 0: # lock ok
         #report_setup() # get the mac from setup - not from setup!
         tcperr = 0 # ??
     else: # linux eth? mac needed   //  assuming archlinux
-        #mac=subexec('/root/d4c/getmac',1).decode("utf-8")  # find mac and convert byte array to string
-        mac=getset_network('ether') # parameter has no effect currently!
+        #mac=getset_network('ether')[0] # parameter has no effect currently!
+        getset_network('ether') # sets mac too 
         print('mac from network configuration',mac)
 
     
@@ -2922,7 +2962,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                     except:
                         todocode=1
 
-            if TODO == 'WLAN?':
+            if TODO == 'WLAN?': # finding the state, true or false as dnsize
                 todocode=0
                 msg='checking wireless state due to command'
                 print(msg)
@@ -3095,7 +3135,7 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 msg='remote command '+TODO+' successfully executed'
                 if TODO.split(',')[0] == 'size':
                     msg=msg+', size '+str(dnsize)
-                if TODO == 'WLAN?':
+                if TODO == 'WLAN?':  # just reporting via ERV here 
                     msg=msg+', state '+str(dnsize) # dnsize used as True or False variable
                 sendstring=sendstring+'ERS:0\n'
                 TODO='' # no more execution
@@ -3223,16 +3263,17 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
                 msg='going to reread aichannels.sql due to consecutive errors'
                 print(msg)
                 syslog(msg)
-                sqlread('aichannels')  # try to restore the table
-            if err_aichannels == 6: # recreate sql databases and stop
-                msg='going to recreate sql databases and stop due to errors with analogue channels'
-                print(msg)
-                syslog(msg)
-                TODO='run,dbREcreate.py,0' # recreate databases before stopping
-                stop=1  # restart via main.py due to sqlite problem
-                if OSTYPE == 'android':
-                    droid.ttsSpeak(msg)
-                    time.sleep(10)
+                sqlread('aichannels')  # try to (drop and) restore the table
+            # the following part is not needed with tables in memory
+            # if err_aichannels == 6: # recreate sql databases and stop
+            #    msg='going to recreate sql databases and stop due to errors with analogue channels'
+            #    print(msg)
+            #    syslog(msg)
+            #    TODO='run,dbREcreate.py,0' # recreate databases before stopping
+            #    stop=1  # restart via main.py due to sqlite problem
+            #    if OSTYPE == 'android':
+            #        droid.ttsSpeak(msg)
+            #        time.sleep(10)
 
     # ### NOW the ai and counter values, to be reported once in 30 s or so
     if ts>appdelay+ts_lastappmain:  # time to read analogue registers and counters, not too often
