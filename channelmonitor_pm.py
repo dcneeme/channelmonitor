@@ -3,7 +3,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 26.12.2013'  # linux and python3 -compatible
+APVER='channelmonitor_rescue.py 26.12.2013'  # linux and python3 -compatible. # THIS IS RESCUE VERSION!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -41,10 +41,15 @@ APVER='channelmonitor_pm.py 26.12.2013'  # linux and python3 -compatible
 # 24.12.2013 fixed output flapping behavior after gsmbreak, add bit changes one after another. use previous output not the powerup value. fixed channelconfig().
 # 25.12.2013 stopped log pushing on usb disconnect. removed chmod + x from within pull(). stopped recreating databases on modbus failures (tables in memory since 20.12).
 # 26.12.2013 replaces traceback() with +str(sys.exc_info()[1]) to be printed and syslogged. counters restored based on counters table, taking svc member, x2,y2 into account.
-                            
+# 26.12.2013 the same version backupped as rescue executable. changed AVS to 2 there!                            
+# 28.12.2013 kick flight mode temporarely on at 20 and 40 s with failing udp send (it may help to restore connectivity, has done so in manual tests!)
 
+ 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
+# add UCV, UCS (gsmUptime)
+
+
 
 #modbusproxy registers / Only one register can be read  or write at time (registers are sometimes long)
 #000-099 ModbusProxy information
@@ -387,7 +392,7 @@ def channelconfig(): # register settings read, write to slaves if needed, report
                             #sendstring=sendstring+"R"+str(mba)+"."+str(regadd)+":"+str(tcpdata)+"\n"  # register content reported as decimal
 
                     except: 
-                        msg=' - could not read the modbus register mba.reg '+str(mba)+'.'+str(regadd)+str(sys.exc_info()[1])
+                        msg=' - could not read the modbus register mba.reg '+str(mba)+'.'+str(regadd)+' '+str(sys.exc_info()[1])
                         print(msg)
                         syslog(msg)
                         #traceback.print_exc()
@@ -1481,7 +1486,7 @@ def report_setup(): # send setup data to server via buff2server table as usual.
     svc_name='setup value'
     oldmac=''
 
-    sendstring=sendstring+"AVV:"+APVER+"\nAVS:0\n"  # program version written into the code
+    sendstring=sendstring+"AVV:"+APVER+"\nAVS:2\n"  # THIS IS RESCUE VERSION!
     udpsend(inumm,int(ts)) # sending to the monitoring server
 
     try:
@@ -1859,15 +1864,20 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
         
         
     except:
-        msg='udp send failure in udpsend() to saddr '+repr(saddr)+', lasting s '+str(int(ts - ts_udpsent))
+        msg='udp send failure in udpsend() to saddr '+repr(saddr)+', lasting s '+str(int(ts - ts_udpsent)) # cannot send, this means problem with connectivity
         syslog(msg)
         print(msg)
-        # make sure flight mode is NOT on
+        # make sure flight mode is NOT on, but switch it may help sometimes 
         if OSTYPE == 'android':
             if droid.checkAirplaneMode().result == True:
                 droid.toggleAirplaneMode(False)
                 droid.ttsSpeak('switched flight mode off')
                 time.sleep(10)
+            else:
+                if ((ts - ts_udpsent > 20) and (ts - ts_udpsent <30)) or ((ts - ts_udpsent > 40) and (ts - ts_udpsent <50)): # comm loss, udp bind problem, cannot send
+                    droid.ttsSpeak('trying to switch flight mode to kick radios')
+                    droid.toggleAirplaneMode(False) # will fall back on next loop execution
+                    time.sleep(10)
 
 
 def push(filename): # send (gzipped) file to supporthost
