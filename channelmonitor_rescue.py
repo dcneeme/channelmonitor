@@ -1,11 +1,10 @@
-# This Python file uses the following encoding: utf-8 
-# see http://www.python.org/dev/peps/pep-0263/
-
+#!/usr/bin/python
 # this script is 1) constantly updating the channel tables according to the modbus register content; 2) sending messages to the central server;
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 29.12.2013'  # linux and python3 -compatible. # THIS IS RESCUE VERSION!
+APVER='channelmonitor_rescue.py 29.12.2013'  # linux and python3 -compatible
+# must be quiet about starting and ending
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -43,16 +42,10 @@ APVER='channelmonitor_pm.py 29.12.2013'  # linux and python3 -compatible. # THIS
 # 24.12.2013 fixed output flapping behavior after gsmbreak, add bit changes one after another. use previous output not the powerup value. fixed channelconfig().
 # 25.12.2013 stopped log pushing on usb disconnect. removed chmod + x from within pull(). stopped recreating databases on modbus failures (tables in memory since 20.12).
 # 26.12.2013 replaces traceback() with +str(sys.exc_info()[1]) to be printed and syslogged. counters restored based on counters table, taking svc member, x2,y2 into account.
-# 26.12.2013 the same version backupped as rescue executable. changed AVS to 2 there!                            
-# 28.12.2013 kick flight mode temporarely on at 20 and 40 s with failing udp send (it may help to restore connectivity, has done so in manual tests! also for wlan.)
-# 29.12.2013 AVS:2 fix to AVS:0
+# 29.12.2013 avs:0 to avs:2                            
 
- 
 # PROBLEMS and TODO
 # inserting to sent2server has problems. skipping it for now, no local log therefore.
-# add UCV, UCS (gsmUptime)
-
-
 
 #modbusproxy registers / Only one register can be read  or write at time (registers are sometimes long)
 #000-099 ModbusProxy information
@@ -996,9 +989,9 @@ def read_dichannel_bits(mba): # binary inputs, bit changes to be found and value
                     MBerr[mba]=0
                 #print ', result',format("%04x" % tcpdata)
             except:
-                #msg='di register '+str(mba)+'.'+str(regadd)+' read FAILURE! no sql update! '+str(sys.exc_info()[1])  # debug
-                #print(msg) # debug
-                #syslog(msg) # debug
+                msg='di register '+str(mba)+'.'+str(regadd)+' read FAILURE! no sql update! '+str(sys.exc_info()[1])
+                print(msg)
+                syslog(msg)
                 #traceback.print_exc() # debug
                 return 1
 
@@ -1489,7 +1482,7 @@ def report_setup(): # send setup data to server via buff2server table as usual.
     svc_name='setup value'
     oldmac=''
 
-    sendstring=sendstring+"AVV:"+APVER+"\nAVS:0\n"  # THIS IS RESCUE VERSION!
+    sendstring=sendstring+"AVV:"+APVER+"\nAVS:2\n"  # program version written into the code
     udpsend(inumm,int(ts)) # sending to the monitoring server
 
     try:
@@ -1845,7 +1838,7 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
 
     try: # commLED on when we try to send, no matter successfully or not
         #client.write_register(address=0, value=256*64, unit=1) # so far there are no other than do7 and do8 in use, MSB!  commLED ON
-        client.write_register(address=114, value=100, unit=1)  # short pulse ### test
+        client.write_register(address=114, value=100, unit=1)  # short pulse
         setbit_dochannels(14,1) # bit, value. commLED ON until got udp
     except:
         msg='failed to light commLED '+str(sys.exc_info()[1])   # show as one line
@@ -1867,20 +1860,15 @@ def udpsend(locnum,locts): # actual udp sending, adding ts to in: for some debug
         
         
     except:
-        msg='udp send failure in udpsend() to saddr '+repr(saddr)+', lasting s '+str(int(ts - ts_udpsent)) # cannot send, this means problem with connectivity
+        msg='udp send failure in udpsend() to saddr '+repr(saddr)+', lasting s '+str(int(ts - ts_udpsent))
         syslog(msg)
         print(msg)
-        # make sure flight mode is NOT on, but switch it may help sometimes 
+        # make sure flight mode is NOT on
         if OSTYPE == 'android':
             if droid.checkAirplaneMode().result == True:
                 droid.toggleAirplaneMode(False)
                 droid.ttsSpeak('switched flight mode off')
                 time.sleep(10)
-            else:
-                if ((ts - ts_udpsent > 20) and (ts - ts_udpsent <30)) or ((ts - ts_udpsent > 40) and (ts - ts_udpsent <50)): # comm loss, udp bind problem, cannot send
-                    droid.ttsSpeak('trying to switch flight mode to kick radios')
-                    droid.toggleAirplaneMode(False) # will fall back on next loop execution
-                    time.sleep(10)
 
 
 def push(filename): # send (gzipped) file to supporthost
@@ -2737,11 +2725,11 @@ if stop == 0: # lock ok
     msg='starting the main loop' #  at '+str(int(ts))+'. mac '+mac+', saddr '+str(repr(saddr))+', modbusproxy '+tcpaddr+':'+str(tcpport)
     print(msg)
     syslog(msg) # log message to file
-    if OSTYPE == 'android':
-        droid.ttsSpeak(msg)
+    #if OSTYPE == 'android':
+    #   droid.ttsSpeak(msg)
 
 
-setbit_dochannels(15,1) # to be sure that gsm power (do8) is up - should be based on register 272, but may be down if program crashed during power break
+setbit_dochannels(15,1) # do be sure that gsm power (do8) - should be up based on register 272, but may be down if program crashed during power break
 
 while stop == 0: # ################  MAIN LOOP BEGIN  ############################################################
     ts=time.mktime(datetime.datetime.now().timetuple()) #seconds now, with comma
@@ -3013,13 +3001,13 @@ while stop == 0: # ################  MAIN LOOP BEGIN  ##########################
             if TODO == 'REBOOT': # reboot, just the application, not the system like android.
                 stop=1 # cmd:REBOOT
                 todocode=0
-                msg='stopping for script restart due to command'
+                msg='stopping for restart due to command'
                 print(msg)
                 syslog(msg) # log message to file
                 sys.stdout.flush()
-                if OSTYPE == 'android':
-                    droid.ttsSpeak(msg)
-                    time.sleep(10)
+                #if OSTYPE == 'android':
+                    #droid.ttsSpeak(msg)
+                    #time.sleep(10)
                 time.sleep(1)
 
             if TODO == 'WLANON':
@@ -3491,9 +3479,9 @@ msg='script ending due to stop signal'
 print(msg)
 syslog(msg)
 sys.stdout.flush()
-if OSTYPE == 'android':
-    droid.ttsSpeak(msg)
-    time.sleep(10)
+#if OSTYPE == 'android':
+#    droid.ttsSpeak(msg)
+#    time.sleep(10)
 
 #main end. main frequency is defined by udp socket timeout!
 ######## END  ######################

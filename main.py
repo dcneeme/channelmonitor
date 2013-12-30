@@ -9,7 +9,7 @@ APPDIR='/sdcard/sl4a/scripts/d4c/' # trailing slash needed
 try:
     import pymodbus  # these modules can also be elsewhere!
     import requests
-    STARTUP_SCRIPTS = ['channelmonitor_pm.py','webserver.py'] # using pymodbus and requests
+    STARTUP_SCRIPTS = ['channelmonitor_pm.py','webserver.py','channelmonitor_rescue.py'] # using pymodbus&requests. the last one will start if first fails
     print 'starting using pymodbus'
 except:
     STARTUP_SCRIPTS = ['channelmonitor3.py','webserver.py'] # not using pymodbus
@@ -27,6 +27,7 @@ for script in STARTUP_SCRIPTS:
     myintent = droid.makeIntent("com.googlecode.android_scripting.action.LAUNCH_BACKGROUND_SCRIPT", None, None, extras, None, "com.googlecode.android_scripting", "com.googlecode.android_scripting.activity.ScriptingLayerServiceLauncher").result
     droid.startActivityIntent(myintent)
     msg='starting '+script
+    time.sleep(5) # rescue start must be delayed for lock to be obtained
   else:
     msg='No such py script - '+script
 
