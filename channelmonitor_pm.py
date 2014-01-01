@@ -5,7 +5,7 @@
 # 3) listening commands and new setup values from the central server; 4) comparing the dochannel values with actual do values in dichannels table and writes to eliminate  the diff.
 # currently supported commands: REBOOT, VARLIST, pull, sqlread, run
 
-APVER='channelmonitor_pm.py 29.12.2013'  # linux and python3 -compatible. # THIS IS RESCUE VERSION!
+APVER='channelmonitor_pm.py 01.01.2014'  # linux and python3 -compatible. # THIS IS RESCUE VERSION!
 
 # 23.06.2013 based on channelmonitor3.py
 # 25.06.2013 added push cmd, any (mostly sql or log) file from d4c directory to be sent into pyapp/mac on itvilla.ee, this SHOULD BE controlled by setup.sql - NOT YET!
@@ -46,6 +46,7 @@ APVER='channelmonitor_pm.py 29.12.2013'  # linux and python3 -compatible. # THIS
 # 26.12.2013 the same version backupped as rescue executable. changed AVS to 2 there!                            
 # 28.12.2013 kick flight mode temporarely on at 20 and 40 s with failing udp send (it may help to restore connectivity, has done so in manual tests! also for wlan.)
 # 29.12.2013 AVS:2 fix to AVS:0
+# 01.01.2014 added BTW, BCW, BVW services via aichannels (battTemperature, BattCharge, BattVoltage)
 
  
 # PROBLEMS and TODO
@@ -778,6 +779,21 @@ def read_aichannels(): # analogue inputs via modbusTCP, to be executed regularly
                 #print Cmd3
                 conn3.execute(Cmd3) # kirjutamine
 
+        if OSTYPE == 'android':
+            try:
+                Cmd3="UPDATE aichannels set value='"+str(BattVoltage)+"', ts='"+str(int(ts))+"' where val_reg='BVW' and member='1'"  # battery voltage to svc BVW
+                conn3.execute(Cmd3) # write conn3
+                Cmd3="UPDATE aichannels set value='"+str(BattCharge)+"', ts='"+str(int(ts))+"' where val_reg='BCW' and member='1'"  # battery charge to svc BCW
+                conn3.execute(Cmd3) # write conn3
+                Cmd3="UPDATE aichannels set value='"+str(BattTemperature)+"', ts='"+str(int(ts))+"' where val_reg='BTW' and member='1'"  # battery temperature to svc BTW
+                conn3.execute(Cmd3) # write conn3
+                msg='battery voltage, charge, temperature written into aichannels'
+            except:
+                msg='failed to update aichannels with battery voltage, charge and temperature'
+                pass # if no such row in aichannels
+            syslog(msg)
+            print(msg)
+            
         conn3.commit() # aichannels transaction end
         return 0
 
@@ -1517,7 +1533,7 @@ def report_setup(): # send setup data to server via buff2server table as usual.
                 print ('updated W272_dict, became',W272_dict)
                 
             if val_reg == 'S514': # syslog ip address
-                if reg_val == '0.0.0.0':
+                if reg_val == '0.0.0.0' or reg_val == '':
                     loghost='255.255.255.255' # broadcast
                 else:
                     loghost=reg_val
